@@ -1,0 +1,25 @@
+# Web Framework
+fastapi
+pydantic
+python-dotenv
+
+# Database
+sqlalchemy
+
+# Excel handling
+openpyxl
+
+# Web scraping
+beautifulsoup4
+requests
+playwright
+aiohttp
+markdownify
+
+# Dashboard
+dash
+plotly
+pandas
+
+# AI/ML
+pydantic-ai
