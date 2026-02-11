@@ -2,6 +2,8 @@
 fastapi
 pydantic
 python-dotenv
+uvicorn
+jinja2
 
 # Database
 sqlalchemy
@@ -20,6 +22,9 @@ markdownify
 dash
 plotly
 pandas
+reportlab
+numpy
 
 # AI/ML
 pydantic-ai
+google-genai

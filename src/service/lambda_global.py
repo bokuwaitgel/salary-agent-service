@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-from schemas.lambda_jobs import LambdaJobSchema
+from schemas.database.lambda_jobs import LambdaJobSchema
 
 #get detail url 
 

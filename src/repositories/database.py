@@ -3,8 +3,10 @@ from pydantic import BaseModel
 from typing import Any, List, Union
 from sqlalchemy.orm import Session
 
-from schemas.zangia_jobs import ZangiaJobTable
-from schemas.lambda_jobs import LambdaJobTable
+from schemas.database.zangia_jobs import ZangiaJobTable
+from schemas.database.lambda_jobs import LambdaJobTable
+from schemas.database.base_classifier_db import JobClassificationOutputTable
+from schemas.database.salary_calculation_db import SalaryCalculationOutputTable
 
 class DatabaseRepository(ABC):
     def __init__(self, db_session: Session):
@@ -141,3 +143,90 @@ class LambdaJobRepository(DatabaseRepository):
         db_obj = self.get_by_id(record_id)
         self.db_session.delete(db_obj)
         self.db_session.commit()
+
+
+class JobClassificationOutputRepository(DatabaseRepository):
+    def get_by_id(self, record_id: int) -> JobClassificationOutputTable:
+        return self.db_session.query(JobClassificationOutputTable).filter(JobClassificationOutputTable.id == record_id).first()
+
+    def get_all(self) -> List[JobClassificationOutputTable]:
+        return self.db_session.query(JobClassificationOutputTable).all()
+
+    def create(self, obj_in: dict) -> JobClassificationOutputTable:
+        #check id exists
+        if not obj_in.get("id"):
+            raise ValueError("JobClassificationOutput requires non-empty `id`.")
+
+        check_existing = self.get_by_id(obj_in["id"])
+        if check_existing:
+            print(f"Record with id {obj_in['id']} already exists. Skipping creation.")
+            return check_existing
+
+        data = obj_in.copy()
+        db_obj = JobClassificationOutputTable(**data)
+        self.db_session.add(db_obj)
+        self.db_session.commit()
+        return db_obj
+
+    def update(self, record_id: int, obj_in: BaseModel) -> JobClassificationOutputTable:
+        db_obj = self.get_by_id(record_id)
+        for field, value in obj_in.model_dump().items():
+            setattr(db_obj, field, value)
+        self.db_session.commit()
+        return db_obj
+
+    def delete(self, record_id: int) -> None:
+        db_obj = self.get_by_id(record_id)
+        self.db_session.delete(db_obj)
+        self.db_session.commit()
+
+
+
+class SalaryCalculationOutputRepository(DatabaseRepository):
+    def get_by_id(self, record_id: int) -> SalaryCalculationOutputTable:
+        return self.db_session.query(SalaryCalculationOutputTable).filter(SalaryCalculationOutputTable.id == record_id).first()
+
+    def get_all(self) -> List[SalaryCalculationOutputTable]:
+        return self.db_session.query(SalaryCalculationOutputTable).all()
+    
+    def get_by_type(self, type_value: str) -> List[SalaryCalculationOutputTable]:
+        return self.db_session.query(SalaryCalculationOutputTable).filter(SalaryCalculationOutputTable.type == type_value).all()
+
+    def check_exists(self, obj: dict) -> Union[SalaryCalculationOutputTable, None]:
+        #check year, month, title, type exists
+        return self.db_session.query(SalaryCalculationOutputTable).filter(
+            SalaryCalculationOutputTable.year == obj.get("year"),
+            SalaryCalculationOutputTable.month == obj.get("month"),
+            SalaryCalculationOutputTable.title == obj.get("title"),
+            SalaryCalculationOutputTable.type == obj.get("type"),
+        ).first()
+    
+
+    def create(self, obj_in: dict) -> SalaryCalculationOutputTable:
+        #check id exists
+        check_existing = self.check_exists(obj_in)
+        if check_existing:
+            print(f"Record for {obj_in.get('title')} ({obj_in.get('type')}) for {obj_in.get('month')}/{obj_in.get('year')} already exists. Skipping creation.")
+            return check_existing
+
+        data = obj_in.copy()
+        db_obj = SalaryCalculationOutputTable(**data)
+        self.db_session.add(db_obj)
+        self.db_session.commit()
+        return db_obj
+
+    def update(self, record_id: int, obj_in: BaseModel) -> SalaryCalculationOutputTable:
+        db_obj = self.get_by_id(record_id)
+        for field, value in obj_in.model_dump().items():
+            setattr(db_obj, field, value)
+        self.db_session.commit()
+        return db_obj
+
+    def delete(self, record_id: int) -> None:
+        db_obj = self.get_by_id(record_id)
+        self.db_session.delete(db_obj)
+        self.db_session.commit()
+
+
+
+

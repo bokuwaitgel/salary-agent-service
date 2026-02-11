@@ -4,7 +4,7 @@ import json
 
 from typing import List
 from pydantic import BaseModel
-from schemas.zangia_jobs import ZangiaJobSchema
+from schemas.database.zangia_jobs import ZangiaJobSchema
 from src.repositories.database import ZangiaJobRepository
 
 class ZangiaDBService:
@@ -42,7 +42,7 @@ def fetch_job_listings(
     params = {
         "limit": limit,
         "page": page,
-        "postDate": 4,  # Last 24 hours
+        "postDate": 3,  # Last 7 days
         "time": 1,       # Full-time jobs
         "timetypeId[]": 1,  # Permanent jobs
         "addrId[]": 1       # Ulaanbaatar

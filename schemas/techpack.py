@@ -158,13 +158,7 @@ class JobClasifyOutput(BaseModel):
 	company: Optional[str] = Field(None, description="The full legal name or brand name of the company or organization offering the position. Use the Mongolian name if available, otherwise use English.")
 	min_salary: Optional[int] = Field(None, description="The minimum salary amount offered for this position in Mongolian Tugrik (MNT). Extract only if explicitly stated. Use null if salary is negotiable or not mentioned.")
 	max_salary: Optional[int] = Field(None, description="The maximum salary amount offered for this position in Mongolian Tugrik (MNT). Extract only if explicitly stated. Use null if salary is negotiable or not mentioned.")
-	bonus: Optional[List[JobBonus]] = Field(None, description="A comprehensive list of all additional compensation, bonuses, benefits, and incentives mentioned in the job posting. Include performance bonuses, meal allowances, transportation benefits, insurance, vacation days, stock options, etc. Extract as many details as possible.")
-	requirements: Optional[List[Requirements]] = Field(None, description="All qualifications, skills, experience levels, education requirements, certifications, language proficiencies, and other prerequisites mentioned for the position. Be thorough and include both mandatory and preferred requirements.")
-	job_level_category: Optional[JobLevelCategory] = Field(None, description="The broad organizational hierarchy category this position belongs to. Determine based on: EXECUTIVE_MANAGEMENT (CEO, CFO level 10-11), MANAGEMENT (Manager, Senior Manager level 7-9), SPECIALIST (professional requiring degree level 4-6), or STAFF (entry-level or support level 1-3). Analyze the job title, responsibilities, and required experience to classify correctly.")
-	job_grade: Optional[JobGrade] = Field(None, description="The numerical grade level from 1 to 11 representing the position's rank in the organizational hierarchy. Level 1-3: entry-level staff, Level 4-6: specialists and professionals, Level 7-9: management positions, Level 10-11: executive leadership. Consider job responsibilities, required experience, and decision-making authority.")
-	job_level: Optional[JobLevel] = Field(None, description="The specific Mongolian job level title that best matches this position. Choose from the predefined enum values based on the position's requirements and responsibilities. Consider education requirements, experience level, and scope of authority to determine the appropriate level title.")
-	job_category: Optional[JobCategory] = Field(None, description="The specific functional role or job category that best describes this position. Select from the predefined enum values based on the primary job function, technical skills required, and industry context. If no exact match exists, use OTHER. Consider the core responsibilities and technical domain of the role.")
-
+	job_level: Optional[JobLevel] = Field(None, description="The job level or position ladder for this role. Classify based on the responsibilities, required experience, and seniority as described in the job posting. Use the predefined JobLevel categories.")
 
 class TechpackJobClasifierConfig(BaseModel):
 	system_prompt: str = Field(default="You are an expert job market analyst specializing in Mongolian job market data classification.", description="System prompt for the analysis model")
@@ -195,44 +189,17 @@ class TechpackJobClasifierAgent:
 			print(f"Error classifying job: {e}")
 			return None
 
-	async def classify_job_batch(self, input_data: List[dict], batch_size: int = 100):
-		"""Classify jobs using batch_agent (100 jobs per batch) with 10 parallel batches."""
-		import asyncio
-		all_results = []
-		total = len(input_data)
-		
-		# Process 15 batches in parallel (each batch processes 100 jobs)
-		parallel_batches = 10
-		chunk_size = batch_size * parallel_batches  # 2000 jobs at a time
-		
-		for chunk_start in range(0, total, chunk_size):
-			# Create up to 10 parallel tasks
-			tasks = []
-			for i in range(parallel_batches):
-				batch_start = chunk_start + (i * batch_size)
-				if batch_start >= total:
-					break
-				
-				batch = input_data[batch_start:batch_start + batch_size]
-				if batch:
-					print(f"Preparing batch {batch_start // batch_size + 1} with {len(batch)} jobs")
-					tasks.append(self.batch_agent.run(str(batch)))
-			
-			if tasks:
-				print(f"Running {len(tasks)} batches in parallel...")
-				# Execute all tasks in parallel
-				results = await asyncio.gather(*tasks, return_exceptions=True)
-				try:
-					# Collect results
-					for result in results:
-						if isinstance(result, Exception):
-							print(f"Error in batch: {result}")
-						elif result is not None and hasattr(result, 'data'):
-							all_results.extend(result.data) # type: ignore
-				except Exception as e:
-					print(f"Error processing batch results: {e}")
-		print(f"Total jobs processed: {len(all_results)}")
-		return all_results
+	async def classify_job_batch(self, input_data: List[dict]):
+		"""classify a batch of job descriptions."""
+		try:
+			input_str = str(input_data)
+			response = await self.batch_agent.run(input_str)
+			print(response.usage())
+			return response.output
+		except Exception as e:
+			print(f"Error classifying job batch: {e}")
+			return None
+
 	
 
 class JobSalaryRequirement(BaseModel):
@@ -248,11 +215,6 @@ class JobSalaryOutput(BaseModel):
 	min_salary: int = Field(..., description="The calculated minimum salary amount for this position in Mongolian Tugrik (MNT).")
 	max_salary: int= Field(..., description="The calculated maximum salary amount for this position in Mongolian Tugrik (MNT).")
 	average_salary: int = Field(..., description="The calculated median salary amount for this position in Mongolian Tugrik (MNT).")
-	requirements_details: str = Field(..., description="A detailed explanation of how various job requirements impact the salary calculation for this position. That should be selected")
-	requirements: List[JobSalaryRequirement] = Field(..., description="A list of specific requirements that impact the salary calculation for this position. That should be max 5 requirements.", max_length=5, min_length=1)
-	bonus_details: str = Field(..., description="A detailed explanation of how various bonuses or benefits influence the salary calculation for this position.")
-	bonus: List[JobSalaryBonus] = Field(..., description="A list of bonuses or benefits that influence the salary calculation for this position. That should be max 5 bonuses.", max_length=5, min_length=1)
-
 class TechpackJobSalaryCalculatorConfig(BaseModel):
 	system_prompt: str = Field(default="You are an expert job market analyst specializing in Mongolian job market salary analysis.", description="System prompt for the salary analysis model")
 	model_name: str = Field(default="google-gla:gemini-3-pro-preview", description="Model name to use for salary analysis")

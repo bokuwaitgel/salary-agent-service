@@ -12,7 +12,7 @@ class SalaryAnalystAgent(ABC):
         pass
 
     @abstractmethod
-    async def classify_job_batch(self, input_data: List[BaseModel], batch_size: int = 10):
+    async def classify_job_batch(self, input_data: List[dict] | List[BaseModel] | List[BinaryContent] | BinaryContent):
         pass
 
     @abstractmethod
@@ -30,13 +30,12 @@ class AgentProcessor:
         logger.debug(f"Job processing completed")
         return result
     
-    async def process_batch(self, input_data: List[BaseModel] | Any, batch_size: int = 10):
-        logger.info(f"Processing batch of {len(input_data)} jobs")
-        result = await self.agent.classify_job_batch(input_data, batch_size=batch_size)
+    async def process_batch(self, input_data: List[BaseModel] | List[BinaryContent] | BinaryContent):
+        result = await self.agent.classify_job_batch(input_data)
         logger.info(f"Batch processing completed")
         return result
     
-    async def calculate_salary(self, job_data: BaseModel | str | BinaryContent | List[BinaryContent]):
+    async def calculate_salary(self, job_data: BaseModel | str | BinaryContent | List[BinaryContent] | Any):
         logger.debug(f"Calculating salary with {type(self.agent).__name__}")
         result = await self.agent.calculate_salary(job_data)
         logger.debug(f"Salary calculation completed")

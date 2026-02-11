@@ -1,0 +1,21 @@
+.card.skeleton {
+  background: #E5E7EB !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.card.skeleton::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150px;
+  width: 150px;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.6), rgba(255,255,255,0));
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+  0% { left: -150px; }
+  100% { left: 100%; }
+}
