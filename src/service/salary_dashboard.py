@@ -282,8 +282,6 @@ def _render_chat(history: List[Dict[str, str]]) -> List[html.Div]:
                     "borderRadius": "14px",
                     "marginBottom": "10px",
                     "maxWidth": "85%",
-                    "maxHeight": "180px",
-                    "overflowY": "auto",
                     "boxShadow": "0 2px 4px rgba(0,0,0,0.05)",
                 },
             )
