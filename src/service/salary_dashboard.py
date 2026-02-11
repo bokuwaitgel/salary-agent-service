@@ -434,6 +434,7 @@ app.layout = html.Div(
                                     style={
                                         "flex": "1",
                                         "minHeight": "360px",
+                                        "maxHeight": "420px",
                                         "overflowY": "auto",
                                         "display": "flex",
                                         "flexDirection": "column",
