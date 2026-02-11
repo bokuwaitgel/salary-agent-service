@@ -894,5 +894,5 @@ def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: List
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True, port="8006")
+    app.run(debug=True, port="8006")
     

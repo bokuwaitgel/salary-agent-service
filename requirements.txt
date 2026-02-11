@@ -24,6 +24,7 @@ plotly
 pandas
 reportlab
 numpy
+waitress
 
 # AI/ML
 pydantic-ai
