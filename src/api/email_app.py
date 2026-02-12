@@ -11,12 +11,15 @@ from io import BytesIO
 from typing import List, Optional
 
 import smtplib
+import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
+from sqlalchemy import create_engine
 
 from src.dependencies import get_classifier_output_repository
 from schemas.base_classifier import JobClassificationOutput, JobRequirement, JobBenefit
@@ -29,6 +32,11 @@ app = FastAPI(title="Salary Agent Email API", version="1.0.0")
 class EmailRequest(BaseModel):
     to_email: str = Field(..., description="Recipient email address")
     subject: Optional[str] = Field(None, description="Email subject")
+
+
+class SalaryReportRequest(BaseModel):
+    type: Optional[str] = Field("function", description="Type filter: function, job_level, industry, or techpack_category")
+    title: Optional[str] = Field(None, description="Optional title filter")
 
 
 def _format_requirements(requirements: List[object]) -> str:
@@ -181,6 +189,92 @@ def _build_excel() -> bytes:
     return file_stream.read()
 
 
+def _build_salary_excel(type_filter: str = "function", title_filter: Optional[str] = None) -> bytes:
+    """Build Excel report for salary calculation data."""
+    engine = create_engine(
+        os.getenv("DATABASE_URI", "sqlite:///products.db"),
+        pool_pre_ping=True,
+    )
+    query = "SELECT * FROM salary_calculation_output ORDER BY created_at DESC"
+    df = pd.read_sql(query, engine)
+    
+    # Apply filters
+    if "type" in df.columns:
+        df = df[df["type"] == type_filter]
+    
+    if title_filter and "title" in df.columns:
+        df = df[df["title"] == title_filter]
+    
+    # Exclude "All" titles
+    if "title" in df.columns:
+        df = df[~df["title"].astype(str).str.startswith("All ")]
+    
+    # Get latest per title
+    if "created_at" in df.columns and df["created_at"].notna().any():
+        df = df.sort_values("created_at").drop_duplicates(subset=["title"], keep="last")
+    
+    # Prepare display columns
+    display_df = df.rename(
+        columns={
+            "title": "Ажлын ангилал",
+            "min_salary": "Доод цалин",
+            "max_salary": "Дээд цалин",
+            "average_salary": "Дундаж цалин",
+            "job_count": "Зарын тоо",
+            "zangia_count": "Zangia",
+            "lambda_count": "Lambda",
+        }
+    )
+    
+    columns_to_export = [
+        "Ажлын ангилал",
+        "Доод цалин",
+        "Дээд цалин",
+        "Дундаж цалин",
+        "Зарын тоо",
+        "Zangia",
+        "Lambda",
+    ]
+    display_df = display_df[[col for col in columns_to_export if col in display_df.columns]]
+    
+    # Create Excel file
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        display_df.to_excel(writer, index=False, sheet_name="Salary_Report")
+        ws = writer.sheets["Salary_Report"]
+        
+        # Style header
+        header_fill = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Auto-adjust column widths
+        for col in ws.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                if cell.value is not None:
+                    max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
+        
+        # Format money columns
+        money_cols = {"Доод цалин", "Дээд цалин", "Дундаж цалин"}
+        for col_idx, cell in enumerate(ws[1], start=1):
+            if cell.value in money_cols:
+                for row in range(2, ws.max_row + 1):
+                    ws.cell(row=row, column=col_idx).number_format = '#,##0"₮"'
+                    ws.cell(row=row, column=col_idx).alignment = Alignment(horizontal="right")
+            if cell.value in {"Зарын тоо", "Zangia", "Lambda"}:
+                for row in range(2, ws.max_row + 1):
+                    ws.cell(row=row, column=col_idx).alignment = Alignment(horizontal="center")
+    
+    buffer.seek(0)
+    return buffer.read()
+
+
 def _send_email(to_email: str, subject: str, attachment: bytes, filename: str) -> None:
     sender_email = os.getenv("SENDER_EMAIL", "itgel6708@gmail.com")
     app_password = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -224,6 +318,53 @@ async def email_job_classifications(request: EmailRequest) -> dict:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"job_classifications_{timestamp}.xlsx"
         _send_email(request.to_email, subject, attachment, filename)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"status": "sent", "to": request.to_email, "filename": filename}
+
+@app.post("/download/salary-report")
+async def download_salary_report_post(request: SalaryReportRequest):
+    """Download salary report as Excel file (POST version).
+    
+    Args:
+        request: Request with type and optional title filter
+    
+    Returns:
+        Excel file with salary report data
+    """
+    try:
+        excel_bytes = _build_salary_excel(type_filter=request.type or "function", title_filter=request.title)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"salary_report_{timestamp}.xlsx"
+        
+        return StreamingResponse(
+            BytesIO(excel_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/email/salary-report")
+async def email_salary_report(request: EmailRequest, filters: SalaryReportRequest) -> dict:
+    """Generate salary report and send it via email.
+    
+    Args:
+        request: EmailRequest with recipient and optional subject
+        filters: SalaryReportRequest with type and optional title filter
+    Returns:
+        Status of email sending
+    """
+
+    subject = request.subject or "Salary Report"
+
+    try:
+        excel_bytes = _build_salary_excel(type_filter=filters.type or "function", title_filter=filters.title)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"salary_report_{timestamp}.xlsx"
+        _send_email(request.to_email, subject, excel_bytes, filename)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
