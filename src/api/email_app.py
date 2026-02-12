@@ -36,7 +36,6 @@ class EmailRequest(BaseModel):
 
 class SalaryReportRequest(BaseModel):
     type: Optional[str] = Field("function", description="Type filter: function, job_level, industry, or techpack_category")
-    title: Optional[str] = Field(None, description="Optional title filter")
 
 
 def _format_requirements(requirements: List[object]) -> str:
@@ -334,7 +333,7 @@ async def download_salary_report_post(request: SalaryReportRequest):
         Excel file with salary report data
     """
     try:
-        excel_bytes = _build_salary_excel(type_filter=request.type or "function", title_filter=request.title)
+        excel_bytes = _build_salary_excel(type_filter=request.type or "function")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"salary_report_{timestamp}.xlsx"
         
@@ -361,7 +360,7 @@ async def email_salary_report(request: EmailRequest, filters: SalaryReportReques
     subject = request.subject or "Salary Report"
 
     try:
-        excel_bytes = _build_salary_excel(type_filter=filters.type or "function", title_filter=filters.title)
+        excel_bytes = _build_salary_excel(type_filter=filters.type or "function")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"salary_report_{timestamp}.xlsx"
         _send_email(request.to_email, subject, excel_bytes, filename)
