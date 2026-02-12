@@ -33,8 +33,9 @@ class EmailRequest(BaseModel):
     to_email: str = Field(..., description="Recipient email address")
     subject: Optional[str] = Field(None, description="Email subject")
 
-
 class SalaryReportRequest(BaseModel):
+    to_email: str = Field(..., description="Recipient email address")
+    subject: Optional[str] = Field(None, description="Email subject")
     type: Optional[str] = Field("function", description="Type filter: function, job_level, industry, or techpack_category")
 
 
@@ -347,20 +348,21 @@ async def download_salary_report_post(request: SalaryReportRequest):
 
 
 @app.post("/email/salary-report")
-async def email_salary_report(request: EmailRequest, filters: SalaryReportRequest) -> dict:
+async def email_salary_report(request: SalaryReportRequest) -> dict:
     """Generate salary report and send it via email.
     
     Args:
-        request: EmailRequest with recipient and optional subject
-        filters: SalaryReportRequest with type and optional title filter
+        request: Request with recipient email, subject, type, and optional title filter
     Returns:
         Status of email sending
     """
 
     subject = request.subject or "Salary Report"
 
+    
+
     try:
-        excel_bytes = _build_salary_excel(type_filter=filters.type or "function")
+        excel_bytes = _build_salary_excel(type_filter=request.type or "function")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"salary_report_{timestamp}.xlsx"
         _send_email(request.to_email, subject, excel_bytes, filename)
