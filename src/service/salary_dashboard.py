@@ -125,6 +125,8 @@ TYPE_LABELS = {
     "techpack_category": "Ангилал",
 }
 
+ALL_TITLES_VALUE = "__all__"
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -514,11 +516,11 @@ def update_title_options(selected_type: str, n_intervals: int):
     df = _latest_per_title(df)
     if df.empty:
         return [], None
-    options = [
+    options = [{"label": "Бүгд", "value": ALL_TITLES_VALUE}] + [
         {"label": title, "value": title}
         for title in sorted(df["title"].dropna().unique().tolist())
     ]
-    return options, (options[0]["value"] if options else None)
+    return options, ALL_TITLES_VALUE
 
 
 @callback(
@@ -565,7 +567,13 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
 
     display_label = TYPE_LABELS.get(selected_type, "Төрөл")
 
-    if selected_title and selected_title in df_all["title"].values:
+    is_all_selected = (
+        not selected_title
+        or selected_title == ALL_TITLES_VALUE
+        or selected_title not in df_all["title"].values
+    )
+
+    if not is_all_selected:
         df_selected = df_all[df_all["title"] == selected_title].copy()
         df_selected_latest = df_latest[df_latest["title"] == selected_title].copy()
     else:
@@ -574,14 +582,17 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
 
     kpis = _build_kpi_cards(df_selected_latest)
 
-    bar_df = df_latest.groupby("title", as_index=False)["average_salary"].mean()
+    chart_scope_label = "Бүгд (дундаж)" if is_all_selected else str(selected_title)
+    chart_df_latest = df_selected_latest.copy()
+
+    bar_df = chart_df_latest.groupby("title", as_index=False)["average_salary"].mean()
     bar_df["title_short"] = bar_df["title"].apply(_shorten_label)
     bar_fig = px.bar(
         bar_df,
         y="title_short",
         x="average_salary",
         orientation="h",
-        title=f"{display_label} - Дундаж цалин",
+        title=f"{display_label} - Дундаж цалин ({chart_scope_label})",
         labels={"title_short": display_label, "average_salary": "Дундаж цалин (₮)"},
         color_discrete_sequence=[COLORS["primary"]],
         hover_data={"title": True, "title_short": False, "average_salary": True},
@@ -592,7 +603,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
         yaxis={"automargin": True, "categoryorder": "total ascending"},
     )
 
-    range_df = df_latest.groupby("title", as_index=False).agg(
+    range_df = chart_df_latest.groupby("title", as_index=False).agg(
         min_salary=("min_salary", "min"),
         max_salary=("max_salary", "max"),
         average_salary=("average_salary", "mean"),
@@ -612,7 +623,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
         )
     )
     range_fig.update_layout(
-        title=f"{display_label} - Цалингийн хүрээ",
+        title=f"{display_label} - Цалингийн хүрээ ({chart_scope_label})",
         barmode="group",
         height=460,
         margin={"l": 120, "r": 20, "t": 50, "b": 40},
@@ -620,15 +631,15 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
         yaxis={"automargin": True, "categoryorder": "total ascending"},
     )
 
-    if "job_count" in df_latest.columns:
-        count_df = df_latest.groupby("title", as_index=False)["job_count"].sum()
+    if "job_count" in chart_df_latest.columns:
+        count_df = chart_df_latest.groupby("title", as_index=False)["job_count"].sum()
         count_df["title_short"] = count_df["title"].apply(_shorten_label)
         count_fig = px.bar(
             count_df,
             y="title_short",
             x="job_count",
             orientation="h",
-            title=f"{display_label} - Ажлын байрны тоо",
+            title=f"{display_label} - Ажлын байрны тоо ({chart_scope_label})",
             labels={"title_short": display_label, "job_count": "Ажлын байр"},
             color_discrete_sequence=[COLORS["accent"]],
             hover_data={"title": True, "title_short": False, "job_count": True},
@@ -648,44 +659,55 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
             x="period",
             y="average_salary",
             markers=True,
-            title=f"{display_label} - Цаг хугацааны тренд",
+            title=f"{display_label} - Цаг хугацааны тренд ({chart_scope_label})",
             labels={"period": "Сар", "average_salary": "Дундаж цалин (₮)"},
         )
         trend_fig.update_layout(margin={"l": 20, "r": 20, "t": 50, "b": 60})
     else:
         trend_fig = _empty_figure("No time series data")
 
-    if "zangia_count" in df_latest.columns and "lambda_count" in df_latest.columns:
+    if "zangia_count" in chart_df_latest.columns and "lambda_count" in chart_df_latest.columns:
         source_total = {
-            "Zangia": int(df_latest["zangia_count"].sum()),
-            "Lambda Global": int(df_latest["lambda_count"].sum()),
+            "Zangia": int(chart_df_latest["zangia_count"].sum()),
+            "Lambda Global": int(chart_df_latest["lambda_count"].sum()),
         }
         source_fig = px.pie(
             names=list(source_total.keys()),
             values=list(source_total.values()),
             hole=0.45,
-            title="Эх сурвалжийн харьцаа",
+            title=f"Эх сурвалжийн харьцаа ({chart_scope_label})",
             color_discrete_sequence=[COLORS["primary"], COLORS["accent"]],
         )
         source_fig.update_layout(margin={"l": 20, "r": 20, "t": 50, "b": 20})
     else:
         source_fig = _empty_figure("No source data")
 
-    if "period" in df_all.columns and df_all["period"].notna().any():
-        avg_scatter_df = df_all.groupby(["period", "title"], as_index=False)["average_salary"].mean()
-        avg_scatter = px.scatter(
-            avg_scatter_df,
-            x="period",
-            y="average_salary",
-            color="title",
-            title=f"Дундаж цалингийн чиг хандлага ({display_label})",
-            labels={"period": "Он-Сар", "average_salary": "Дундаж цалин (₮)", "title": display_label},
-        )
+    if "period" in df_selected.columns and df_selected["period"].notna().any():
+        if is_all_selected:
+            avg_scatter_df = df_selected.groupby("period", as_index=False)["average_salary"].mean()
+            avg_scatter = px.scatter(
+                avg_scatter_df,
+                x="period",
+                y="average_salary",
+                title=f"Дундаж цалингийн чиг хандлага ({display_label} - Бүгд, дундаж)",
+                labels={"period": "Он-Сар", "average_salary": "Дундаж цалин (₮)"},
+                color_discrete_sequence=[COLORS["secondary"]],
+            )
+        else:
+            avg_scatter_df = df_selected.groupby(["period", "title"], as_index=False)["average_salary"].mean()
+            avg_scatter = px.scatter(
+                avg_scatter_df,
+                x="period",
+                y="average_salary",
+                color="title",
+                title=f"Дундаж цалингийн чиг хандлага ({display_label} - {chart_scope_label})",
+                labels={"period": "Он-Сар", "average_salary": "Дундаж цалин (₮)", "title": display_label},
+            )
         avg_scatter.update_layout(margin={"l": 20, "r": 20, "t": 50, "b": 60})
     else:
         avg_scatter = _empty_figure("No time series data")
 
-    table_df = df_latest.copy()
+    table_df = chart_df_latest.copy()
     table_df = table_df.rename(
         columns={
             "title": "Ажлын ангилал",

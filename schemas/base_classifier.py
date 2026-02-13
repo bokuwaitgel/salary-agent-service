@@ -67,20 +67,19 @@ class UnifiedJobLevelCategory(str, Enum):
 
 class ExperienceLevel(str, Enum):
     """Experience level categories."""
-    ENTRY = "Эхлэгч"  # 0-2 years
-    JUNIOR = "Бага туршлагатай"  # 2-4 years
-    INTERMEDIATE = "Дунд туршлагатай"  # 4-7 years
-    SENIOR = "Өндөр туршлагатай"  # 7-12 years
-    EXPERT = "Мэргэшсэн"  # 12+ years
-
+    ENTRY = "0-2"  # 0-2 years
+    JUNIOR = "2-4"  # 2-4 years
+    INTERMEDIATE = "4-7"  # 4-7 years
+    SENIOR = "7-10"  # 7-10 years
+    EXPERT = "10+"  # 10+ years
     @property
     def years_range(self) -> tuple[int, int]:
         ranges = {
             ExperienceLevel.ENTRY: (0, 2),
             ExperienceLevel.JUNIOR: (2, 4),
             ExperienceLevel.INTERMEDIATE: (4, 7),
-            ExperienceLevel.SENIOR: (7, 12),
-            ExperienceLevel.EXPERT: (12, 50)
+            ExperienceLevel.SENIOR: (7, 10),
+            ExperienceLevel.EXPERT: (10, 50)
         }
         return ranges.get(self, (0, 2))
 

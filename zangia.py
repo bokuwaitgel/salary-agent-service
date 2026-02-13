@@ -44,7 +44,7 @@ async def main():
     prepared_data = []
     #ignore first 400 data for now, because I already classified them and saved into database
 
-    for data in datas:
+    for data in datas[2000:]:
         dict_data = data.__dict__
         classification_input = JobClassificationInput(
             job_title=dict_data.get("title", ""),

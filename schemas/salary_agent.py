@@ -9,6 +9,9 @@ from pydantic_ai import Agent, BinaryContent
 
 from schemas.base_classifier import JobRequirement
 
+
+
+
 class MainSalaryAgentData(BaseModel):
     """Structured data input for salary analysis with comprehensive job details."""
     title: str = Field(..., description="The job title/position name. This is a primary factor in salary determination as different roles have distinct market rates.")
@@ -29,11 +32,19 @@ class SalaryAgentInput(BaseModel):
     main_data: List[MainSalaryAgentData] = Field(..., description="List of job data entries to analyze. When multiple jobs are provided, analyze them collectively to identify salary patterns, ranges, and statistical distributions for the job category.")
     additional_data: Optional[Any] = Field(None, description="Supplementary market data including: 1) PayLab CSV data with salary benchmarks by job title, function, industry, and experience level. 2) Mongolian salary statistics CSV with national/sectoral averages. Use this data to validate and adjust estimates based on current market conditions.")
 
+class JobXEducationLevel(BaseModel):
+    """Structured data for job experience x salary analysis."""
+    experience_level: str = Field(..., description="Experience level category (e.g., Entry 0-2 years, Junior 2-4 years, Intermediate 4-7 years, Senior 7-12 years, Expert 12+ years). This is a key driver of salary differences within the same role.")
+    # education_level: str = Field(..., description="Education level category (e.g., High School, Bachelor's, Master's, PhD). Higher education levels typically command higher salaries, especially in technical and managerial roles.")
+    salary_min: Optional[int] = Field(None, description="Stated minimum salary in MNT for this experience level. Use as a reference point but validate against market data.")
+    salary_max: Optional[int] = Field(None, description="Stated maximum salary in MNT for this experience level. Use as a reference point but validate against market data.")
 class SalaryAgentOutput(BaseModel):
     """Output data for salary analysis with market-validated estimates."""
     reasoning: str = Field(..., description="Clear 2-4 sentence explanation covering: (1) key factors driving the estimate (job level, industry, experience), (2) how provided market data was used, (3) any adjustments made and why. Cite specific data points when available.")
     min_salary: int = Field(..., description="Recommended minimum salary in MNT. Should be a realistic figure that a hiring manager in Mongolia would recognize as plausible today. Typically represents entry-level compensation for the role, considering all job factors and market data.")
     max_salary: int = Field(..., description="Recommended maximum salary in MNT. Should be a realistic figure that a hiring manager in Mongolia would recognize as plausible today. Typically represents high-performer compensation for this role, accounting for experience, skills, and company factors.")
+    reasoning_experience: str = Field(..., description="Explanation of how experience level impacts salary for this role, citing any specific data points or market trends that support the reasoning. This should clarify how compensation typically increases with experience for this job category in Mongolia.")
+    experience_salary_breakdown: List[JobXEducationLevel] = Field(..., description="Breakdown of salary estimates by experience level, showing how compensation typically increases with experience for this role. This should reflect the expected salary progression from entry-level to expert within the same job category. If any use market data didn't mentioned then just ignore it.", min_length=0)
     average_salary: int = Field(..., description="Market median/average salary in MNT representing typical compensation for this role. Should fall between min and max, typically closer to min for entry-level roles and closer to max for senior roles.")
 
 
