@@ -26746,3 +26746,46 @@ server closed the connection unexpectedly
 2026-02-13 15:38:10 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_body.started request=<Request [b'POST']>
 2026-02-13 15:38:10 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_body.complete
 2026-02-13 15:38:10 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_headers.started request=<Request [b'POST']>
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=UTF-8'), (b'Vary', b'Origin'), (b'Vary', b'X-Origin'), (b'Vary', b'Referer'), (b'Content-Encoding', b'gzip'), (b'Date', b'Fri, 13 Feb 2026 07:44:06 GMT'), (b'Server', b'scaffolding on HTTPServer2'), (b'X-XSS-Protection', b'0'), (b'X-Frame-Options', b'SAMEORIGIN'), (b'X-Content-Type-Options', b'nosniff'), (b'Server-Timing', b'gfet4t7; dur=355857'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+2026-02-13 15:44:06 - httpx - INFO - [_client.py:1740] - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent "HTTP/1.1 200 OK"
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_body.started request=<Request [b'POST']>
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_body.complete
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - response_closed.started
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - response_closed.complete
+2026-02-13 15:44:06 - src.logger - INFO - [agent.py:35] - Batch processing completed
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=UTF-8'), (b'Vary', b'Origin'), (b'Vary', b'X-Origin'), (b'Vary', b'Referer'), (b'Content-Encoding', b'gzip'), (b'Date', b'Fri, 13 Feb 2026 07:44:06 GMT'), (b'Server', b'scaffolding on HTTPServer2'), (b'X-XSS-Protection', b'0'), (b'X-Frame-Options', b'SAMEORIGIN'), (b'X-Content-Type-Options', b'nosniff'), (b'Server-Timing', b'gfet4t7; dur=356303'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+2026-02-13 15:44:06 - httpx - INFO - [_client.py:1740] - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent "HTTP/1.1 200 OK"
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_body.started request=<Request [b'POST']>
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_body.complete
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - response_closed.started
+2026-02-13 15:44:06 - httpcore.http11 - DEBUG - [_trace.py:87] - response_closed.complete
+2026-02-13 15:44:06 - src.logger - INFO - [agent.py:35] - Batch processing completed
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - close.started
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - close.complete
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - close.started
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - connect_tcp.started host='generativelanguage.googleapis.com' port=443 local_address=None timeout=600.0 socket_options=None
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - close.complete
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - connect_tcp.started host='generativelanguage.googleapis.com' port=443 local_address=None timeout=600.0 socket_options=None
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001F217565150>
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - start_tls.started ssl_context=<ssl.SSLContext object at 0x000001F20E302710> server_hostname='generativelanguage.googleapis.com' timeout=600.0
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001F217565050>
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - start_tls.started ssl_context=<ssl.SSLContext object at 0x000001F20E302710> server_hostname='generativelanguage.googleapis.com' timeout=600.0
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001F21741BC50>
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_headers.started request=<Request [b'POST']>
+2026-02-13 15:45:13 - httpcore.connection - DEBUG - [_trace.py:87] - start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x000001F21741BE30>
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_headers.complete
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_body.started request=<Request [b'POST']>
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_headers.started request=<Request [b'POST']>
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_body.complete
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_headers.started request=<Request [b'POST']>
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_headers.complete
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_body.started request=<Request [b'POST']>
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - send_request_body.complete
+2026-02-13 15:45:13 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_headers.started request=<Request [b'POST']>
+2026-02-13 15:52:19 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json; charset=UTF-8'), (b'Vary', b'Origin'), (b'Vary', b'X-Origin'), (b'Vary', b'Referer'), (b'Content-Encoding', b'gzip'), (b'Date', b'Fri, 13 Feb 2026 07:52:20 GMT'), (b'Server', b'scaffolding on HTTPServer2'), (b'X-XSS-Protection', b'0'), (b'X-Frame-Options', b'SAMEORIGIN'), (b'X-Content-Type-Options', b'nosniff'), (b'Server-Timing', b'gfet4t7; dur=426162'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+2026-02-13 15:52:19 - httpx - INFO - [_client.py:1740] - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent "HTTP/1.1 200 OK"
+2026-02-13 15:52:19 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_body.started request=<Request [b'POST']>
+2026-02-13 15:52:20 - httpcore.http11 - DEBUG - [_trace.py:87] - receive_response_body.complete
+2026-02-13 15:52:20 - httpcore.http11 - DEBUG - [_trace.py:87] - response_closed.started
+2026-02-13 15:52:20 - httpcore.http11 - DEBUG - [_trace.py:87] - response_closed.complete
+2026-02-13 15:52:20 - src.logger - INFO - [agent.py:35] - Batch processing completed

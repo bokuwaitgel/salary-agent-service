@@ -17,7 +17,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 from openpyxl.styles import Alignment, Font, PatternFill
-from dash import Input, Output, State, callback, dcc, html, dash_table
+from dash import Input, Output, State, callback, dcc, html, dash_table, ctx
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
@@ -119,10 +119,10 @@ KPI_STYLE = {
 }
 
 TYPE_LABELS = {
-    "function": "Чиг үүрэг",
-    "job_level": "Түвшин",
-    "industry": "Үйл ажиллагааны чиглэл/Салбар",
-    "techpack_category": "Ангилал",
+    "function": "Ажлын ангилал",
+    "job_level": "Албан тушаалын түвшин",
+    "industry": "Ажлын чиглэл",
+    "techpack_category": "Ажлын байрын төрөл",
 }
 
 ALL_TITLES_VALUE = "__all__"
@@ -223,28 +223,28 @@ def _build_kpi_cards(df: pd.DataFrame) -> List[html.Div]:
         html.Div(
             [
                 html.H3(_format_mnt(avg_salary), style={"color": COLORS["dark"], "margin": 0}),
-                html.P("Дундаж цалин", style={"color": COLORS["muted"], "margin": 0}),
+                html.P("Сарын дундаж цалин", style={"color": COLORS["muted"], "margin": 0}),
             ],
             style=KPI_STYLE,
         ),
         html.Div(
             [
                 html.H3(_format_mnt(min_salary), style={"color": COLORS["dark"], "margin": 0}),
-                html.P("Хамгийн бага", style={"color": COLORS["muted"], "margin": 0}),
+                html.P("Хамгийн бага цалин", style={"color": COLORS["muted"], "margin": 0}),
             ],
             style=KPI_STYLE,
         ),
         html.Div(
             [
                 html.H3(_format_mnt(max_salary), style={"color": COLORS["dark"], "margin": 0}),
-                html.P("Хамгийн их", style={"color": COLORS["muted"], "margin": 0}),
+                html.P("Хамгийн өндөр цалин", style={"color": COLORS["muted"], "margin": 0}),
             ],
             style=KPI_STYLE,
         ),
         html.Div(
             [
                 html.H3(f"{total_jobs:,}", style={"color": COLORS["dark"], "margin": 0}),
-                html.P("Нийт ажлын байр", style={"color": COLORS["muted"], "margin": 0}),
+                html.P("Хамрагдсан ажлын байр", style={"color": COLORS["muted"], "margin": 0}),
             ],
             style=KPI_STYLE,
         ),
@@ -265,9 +265,19 @@ def _render_chat(history: List[Dict[str, str]]) -> List[html.Div]:
         bubble_color = COLORS["primary"] if is_user else COLORS["card"]
         text_color = "white" if is_user else COLORS["text"]
         align = "flex-end" if is_user else "flex-start"
+        role_label = "Та" if is_user else "AI туслах"
         items.append(
             html.Div(
                 [
+                    html.Small(
+                        role_label,
+                        style={
+                            "display": "block",
+                            "fontWeight": "bold",
+                            "marginBottom": "4px",
+                            "color": "#E2E8F0" if is_user else COLORS["muted"],
+                        },
+                    ),
                     html.Div(
                         item.get("content", ""),
                         style={
@@ -285,6 +295,7 @@ def _render_chat(history: List[Dict[str, str]]) -> List[html.Div]:
                     "marginBottom": "10px",
                     "maxWidth": "85%",
                     "boxShadow": "0 2px 4px rgba(0,0,0,0.05)",
+                    "border": "1px solid #E2E8F0" if not is_user else "none",
                 },
             )
         )
@@ -305,7 +316,16 @@ server = app.server
 app.layout = html.Div(
     style={"backgroundColor": COLORS["bg"], "padding": "32px", "fontFamily": "Arial, sans-serif"},
     children=[
-        html.H1("💰 Salary Analysis Agent", style={"color": COLORS["dark"], "marginBottom": "24px"}),
+        html.H1("Цалингийн шинжилгээний систем", style={"color": COLORS["dark"], "marginBottom": "8px"}),
+        html.Div(
+            style={**CARD_STYLE, "padding": "14px 18px", "marginBottom": "20px"},
+            children=[
+                html.Div(
+                    "Мэдээллийн эх сурвалж: Zangia, Lambda Global, Paylab, Salary Statistics.",
+                    style={"color": COLORS["text"]},
+                ),
+            ],
+        ),
         dcc.Interval(id="interval-component", interval=5 * 60 * 1000, n_intervals=0),
         dcc.Store(id="chat-store", data=[{"role": "assistant", "content": "Сайн байна уу! Танд юугаар туслах вэ?"}]),
         dcc.Store(id="chat-request"),
@@ -321,15 +341,22 @@ app.layout = html.Div(
                             style=CARD_STYLE,
                             children=[
                                 html.H2("Шүүлтүүр", style={"color": COLORS["dark"], "marginTop": 0}),
-                                dcc.RadioItems(
+                                html.Label(
+                                    "Шүүлтүүрийн төрөл",
+                                    style={"display": "block", "color": COLORS["text"], "marginBottom": "8px", "fontWeight": "bold"},
+                                ),
+                                dcc.Dropdown(
                                     id="type-selector",
                                     options=_safe_type_options(_load_data_main()),
                                     value="function",
-                                    inline=True,
-                                    labelStyle={"marginRight": "16px", "color": COLORS["text"]},
+                                    clearable=False,
                                 ),
                                 html.Div(style={"height": "12px"}),
-                                dcc.Dropdown(id="title-filter", placeholder="Сонголт хийх"),
+                                html.Label(
+                                    "Сонголт",
+                                    style={"display": "block", "color": COLORS["text"], "marginBottom": "8px", "fontWeight": "bold"},
+                                ),
+                                dcc.Dropdown(id="title-filter", placeholder="Сонголт хийх", clearable=False),
                             ],
                         ),
                         html.Div(
@@ -343,25 +370,25 @@ app.layout = html.Div(
                                     id="salary-bar-card",
                                     className="card",
                                     style=CARD_STYLE,
-                                    children=[dcc.Graph(id="salary-bar")],
+                                    children=[dcc.Loading(type="circle", color=COLORS["primary"], children=dcc.Graph(id="salary-bar"))],
                                 ),
                                 html.Div(
                                     id="salary-range-card",
                                     className="card",
                                     style=CARD_STYLE,
-                                    children=[dcc.Graph(id="salary-range")],
+                                    children=[dcc.Loading(type="circle", color=COLORS["primary"], children=dcc.Graph(id="salary-range"))],
                                 ),
                                 html.Div(
                                     id="count-bar-card",
                                     className="card",
                                     style=CARD_STYLE,
-                                    children=[dcc.Graph(id="count-bar")],
+                                    children=[dcc.Loading(type="circle", color=COLORS["primary"], children=dcc.Graph(id="count-bar"))],
                                 ),
                                 html.Div(
                                     id="trend-line-card",
                                     className="card",
                                     style=CARD_STYLE,
-                                    children=[dcc.Graph(id="trend-line")],
+                                    children=[dcc.Loading(type="circle", color=COLORS["primary"], children=dcc.Graph(id="trend-line"))],
                                 ),
                             ],
                         ),
@@ -372,13 +399,13 @@ app.layout = html.Div(
                                     id="source-pie-card",
                                     className="card",
                                     style=CARD_STYLE,
-                                    children=[dcc.Graph(id="source-pie")],
+                                    children=[dcc.Loading(type="circle", color=COLORS["primary"], children=dcc.Graph(id="source-pie"))],
                                 ),
                                 html.Div(
                                     id="avg-scatter-card",
                                     className="card",
                                     style=CARD_STYLE,
-                                    children=[dcc.Graph(id="avg-scatter")],
+                                    children=[dcc.Loading(type="circle", color=COLORS["primary"], children=dcc.Graph(id="avg-scatter"))],
                                 ),
                             ],
                         ),
@@ -402,16 +429,20 @@ app.layout = html.Div(
                                         "cursor": "pointer",
                                     },
                                 ),
-                                dash_table.DataTable(
-                                    id="detail-table",
-                                    page_size=10,
-                                    style_table={"overflowX": "auto"},
-                                    style_cell={"textAlign": "left", "padding": "8px", "fontFamily": "Arial"},
-                                    style_header={
-                                        "backgroundColor": COLORS["primary"],
-                                        "color": "white",
-                                        "fontWeight": "bold",
-                                    },
+                                dcc.Loading(
+                                    type="dot",
+                                    color=COLORS["primary"],
+                                    children=dash_table.DataTable(
+                                        id="detail-table",
+                                        page_size=10,
+                                        style_table={"overflowX": "auto"},
+                                        style_cell={"textAlign": "left", "padding": "8px", "fontFamily": "Arial"},
+                                        style_header={
+                                            "backgroundColor": COLORS["primary"],
+                                            "color": "white",
+                                            "fontWeight": "bold",
+                                        },
+                                    ),
                                 ),
                             ],
                         ),
@@ -425,27 +456,39 @@ app.layout = html.Div(
                             children=[
                                 html.H2("💬 Chatbot", style={"color": COLORS["dark"], "marginTop": 0}),
                                 html.P(
-                                    "Ажлын байрны цалингийн талаар асуулт асууж, шинжилгээ авах боломжтой чатбот.",
+                                    "Ажлын байрны цалингийн мэдээлэлд суурилан асуулт асууж, дүн шинжилгээ хийх боломжтой чатбот.",
                                     style={"color": COLORS["muted"], "marginTop": 0},
                                 ),
                                 html.Div(
-                                    id="chat-output",
-                                    children=_render_chat(
-                                        [{"role": "assistant", "content": "Сайн байна уу! Танд юугаар туслах вэ?"}]
+                                    style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "10px"},
+                                    children=[
+                                        html.Button("Дундаж цалин хэд вэ?", id="quick-q-salary", n_clicks=0, type="button", className="chat-chip-btn"),
+                                        html.Button("Хамгийн өндөр цалинтай ангилал", id="quick-q-top", n_clicks=0, type="button", className="chat-chip-btn"),
+                                        html.Button("Сарын чиг хандлага", id="quick-q-trend", n_clicks=0, type="button", className="chat-chip-btn"),
+                                    ],
+                                ),
+                                dcc.Loading(
+                                    type="circle",
+                                    color=COLORS["primary"],
+                                    children=html.Div(
+                                        id="chat-output",
+                                        children=_render_chat(
+                                            [{"role": "assistant", "content": "Сайн байна уу! Танд юугаар туслах вэ?"}]
+                                        ),
+                                        style={
+                                            "flex": "1",
+                                            "minHeight": "360px",
+                                            "maxHeight": "420px",
+                                            "overflowY": "auto",
+                                            "display": "flex",
+                                            "flexDirection": "column",
+                                            "gap": "4px",
+                                            "padding": "8px",
+                                            "backgroundColor": "#F8FAFC",
+                                            "borderRadius": "12px",
+                                            "border": f"1px solid {COLORS['muted']}20",
+                                        },
                                     ),
-                                    style={
-                                        "flex": "1",
-                                        "minHeight": "360px",
-                                        "maxHeight": "420px",
-                                        "overflowY": "auto",
-                                        "display": "flex",
-                                        "flexDirection": "column",
-                                        "gap": "4px",
-                                        "padding": "8px",
-                                        "backgroundColor": "#F8FAFC",
-                                        "borderRadius": "12px",
-                                        "border": f"1px solid {COLORS['muted']}20",
-                                    },
                                 ),
                                 html.Div(style={"height": "12px"}),
                                 dcc.Input(
@@ -463,7 +506,7 @@ app.layout = html.Div(
                                 ),
                                 dcc.Textarea(
                                     id="chat-input",
-                                    placeholder="Асуумаар зүйлээ бичнэ үү...",
+                                    placeholder="Та асуух зүйлээ энд бичнэ үү...",
                                     style={
                                         "width": "100%",
                                         "height": "70px",
@@ -582,8 +625,10 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
 
     kpis = _build_kpi_cards(df_selected_latest)
 
-    chart_scope_label = "Бүгд (дундаж)" if is_all_selected else str(selected_title)
     chart_df_latest = df_selected_latest.copy()
+    if chart_df_latest.empty:
+        empty = _empty_figure("No data available")
+        return kpis, empty, empty, empty, empty, empty, empty, [], []
 
     bar_df = chart_df_latest.groupby("title", as_index=False)["average_salary"].mean()
     bar_df["title_short"] = bar_df["title"].apply(_shorten_label)
@@ -592,7 +637,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
         y="title_short",
         x="average_salary",
         orientation="h",
-        title=f"{display_label} - Дундаж цалин ({chart_scope_label})",
+        title=f"Сарын дундаж цалин ({display_label})",
         labels={"title_short": display_label, "average_salary": "Дундаж цалин (₮)"},
         color_discrete_sequence=[COLORS["primary"]],
         hover_data={"title": True, "title_short": False, "average_salary": True},
@@ -623,7 +668,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
         )
     )
     range_fig.update_layout(
-        title=f"{display_label} - Цалингийн хүрээ ({chart_scope_label})",
+        title=f"Цалингийн хүрээ ({display_label})",
         barmode="group",
         height=460,
         margin={"l": 120, "r": 20, "t": 50, "b": 40},
@@ -639,7 +684,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
             y="title_short",
             x="job_count",
             orientation="h",
-            title=f"{display_label} - Ажлын байрны тоо ({chart_scope_label})",
+            title=f"Ажлын байрны тоо ({display_label})",
             labels={"title_short": display_label, "job_count": "Ажлын байр"},
             color_discrete_sequence=[COLORS["accent"]],
             hover_data={"title": True, "title_short": False, "job_count": True},
@@ -659,7 +704,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
             x="period",
             y="average_salary",
             markers=True,
-            title=f"{display_label} - Цаг хугацааны тренд ({chart_scope_label})",
+            title="Дундаж цалингийн динамик, сараар",
             labels={"period": "Сар", "average_salary": "Дундаж цалин (₮)"},
         )
         trend_fig.update_layout(margin={"l": 20, "r": 20, "t": 50, "b": 60})
@@ -675,7 +720,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
             names=list(source_total.keys()),
             values=list(source_total.values()),
             hole=0.45,
-            title=f"Эх сурвалжийн харьцаа ({chart_scope_label})",
+            title="Мэдээллийн эх сурвалжийн харьцаа",
             color_discrete_sequence=[COLORS["primary"], COLORS["accent"]],
         )
         source_fig.update_layout(margin={"l": 20, "r": 20, "t": 50, "b": 20})
@@ -689,7 +734,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
                 avg_scatter_df,
                 x="period",
                 y="average_salary",
-                title=f"Дундаж цалингийн чиг хандлага ({display_label} - Бүгд, дундаж)",
+                title=f"Дундаж цалингийн чиг хандлага ({display_label})",
                 labels={"period": "Он-Сар", "average_salary": "Дундаж цалин (₮)"},
                 color_discrete_sequence=[COLORS["secondary"]],
             )
@@ -700,7 +745,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
                 x="period",
                 y="average_salary",
                 color="title",
-                title=f"Дундаж цалингийн чиг хандлага ({display_label} - {chart_scope_label})",
+                title=f"Дундаж цалингийн чиг хандлага ({display_label})",
                 labels={"period": "Он-Сар", "average_salary": "Дундаж цалин (₮)", "title": display_label},
             )
         avg_scatter.update_layout(margin={"l": 20, "r": 20, "t": 50, "b": 60})
@@ -733,6 +778,9 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
         if col in table_df.columns
     ]
     table_data = table_df[ [c["id"] for c in table_columns] ].to_dict("records")
+
+    for fig in [bar_fig, range_fig, count_fig, trend_fig, source_fig, avg_scatter]:
+        fig.update_layout(transition={"duration": 300, "easing": "cubic-in-out"})
 
     return kpis, bar_fig, range_fig, count_fig, trend_fig, source_fig, avg_scatter, table_data, table_columns
 
@@ -808,6 +856,24 @@ def download_excel(n_clicks: int, table_data: List[Dict[str, object]]):
 
 
 @callback(
+    Output("chat-input", "value", allow_duplicate=True),
+    Input("quick-q-salary", "n_clicks"),
+    Input("quick-q-top", "n_clicks"),
+    Input("quick-q-trend", "n_clicks"),
+    prevent_initial_call=True,
+)
+def apply_quick_question(n_salary: int, n_top: int, n_trend: int):
+    triggered = ctx.triggered_id
+    if triggered == "quick-q-salary":
+        return "Дундаж цалин хэд байна вэ?"
+    if triggered == "quick-q-top":
+        return "Хамгийн өндөр дундаж цалинтай ангиллыг хэлээч."
+    if triggered == "quick-q-trend":
+        return "Сүүлийн саруудын дундаж цалингийн чиг хандлагыг тайлбарлаач."
+    return ""
+
+
+@callback(
     Output("chat-store", "data"),
     Output("chat-output", "children"),
     Output("chat-input", "value"),
@@ -842,11 +908,6 @@ def handle_chat(
     request_payload = {"session_id": session_value, "message": message.strip()}
     # Remove 'pending' key for rendering
     clean_history: List[Dict[str, str]] = [{k: v for k, v in item.items() if k != "pending" and isinstance(v, str)} for item in updated_history]
-    return updated_history, _render_chat(clean_history), "", request_payload
-
-    request_payload = {"session_id": session_value, "message": message.strip()}
-    # Remove 'pending' key for rendering
-    clean_history = [{k: v for k, v in item.items() if k != "pending"} for item in updated_history]
     return updated_history, _render_chat(clean_history), "", request_payload
 
 
