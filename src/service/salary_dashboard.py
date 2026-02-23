@@ -145,6 +145,18 @@ def _format_mnt(value: Optional[float]) -> str:
     return f"{value:,.0f} ₮"
 
 
+def _format_mnt_compact(value: Optional[float]) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{(float(value) / 1_000_000):.1f}M MNT"
+
+
+def _format_million_value(value: Optional[float]) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{(float(value) / 1_000_000):.1f}M"
+
+
 def _shorten_label(text: str, max_len: int = 28) -> str:
     if text is None:
         return ""
@@ -343,6 +355,13 @@ def _exclude_all_titles(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_kpi_cards(df: pd.DataFrame) -> List[html.Div]:
+    simple_kpi_style = {
+        **KPI_STYLE,
+        "backgroundColor": "#F8FAFC",
+        "border": "1px solid #E2E8F0",
+        "boxShadow": "none",
+    }
+
     if df.empty:
         return [
             html.Div(
@@ -350,7 +369,7 @@ def _build_kpi_cards(df: pd.DataFrame) -> List[html.Div]:
                     html.H3("N/A", style={"color": COLORS["dark"], "margin": 0}),
                     html.P("No data", style={"color": COLORS["muted"], "margin": 0}),
                 ],
-                style=KPI_STYLE,
+                style=simple_kpi_style,
             )
         ]
 
@@ -362,31 +381,31 @@ def _build_kpi_cards(df: pd.DataFrame) -> List[html.Div]:
     return [
         html.Div(
             [
-                html.H3(_format_mnt(avg_salary), style={"color": COLORS["dark"], "margin": 0}),
+                html.H3(_format_mnt_compact(avg_salary), style={"color": COLORS["dark"], "margin": 0}),
                 html.P("Сарын дундаж цалин", style={"color": COLORS["muted"], "margin": 0}),
             ],
-            style=KPI_STYLE,
+            style=simple_kpi_style,
         ),
         html.Div(
             [
-                html.H3(_format_mnt(min_salary), style={"color": COLORS["dark"], "margin": 0}),
+                html.H3(_format_mnt_compact(min_salary), style={"color": COLORS["dark"], "margin": 0}),
                 html.P("Хамгийн бага цалин", style={"color": COLORS["muted"], "margin": 0}),
             ],
-            style=KPI_STYLE,
+            style=simple_kpi_style,
         ),
         html.Div(
             [
-                html.H3(_format_mnt(max_salary), style={"color": COLORS["dark"], "margin": 0}),
+                html.H3(_format_mnt_compact(max_salary), style={"color": COLORS["dark"], "margin": 0}),
                 html.P("Хамгийн өндөр цалин", style={"color": COLORS["muted"], "margin": 0}),
             ],
-            style=KPI_STYLE,
+            style=simple_kpi_style,
         ),
         html.Div(
             [
                 html.H3(f"{total_jobs:,}", style={"color": COLORS["dark"], "margin": 0}),
                 html.P("Хамрагдсан ажлын байр", style={"color": COLORS["muted"], "margin": 0}),
             ],
-            style=KPI_STYLE,
+            style=simple_kpi_style,
         ),
     ]
 
