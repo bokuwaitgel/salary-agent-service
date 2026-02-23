@@ -27,6 +27,7 @@ class SalaryCalculationOutputTable(Base):
     zangia_count = Column(Integer, nullable=True)
     lambda_count = Column(Integer, nullable=True)
     type = Column(String, nullable=True)
+    experience_salary_breakdown = Column(String, nullable=True)
     year = Column(Integer, nullable=True)
     month = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)

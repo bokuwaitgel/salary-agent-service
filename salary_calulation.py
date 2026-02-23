@@ -1,11 +1,12 @@
 from src.dependencies import  get_salary_calculation_output_repository
 from src.repositories.database import SalaryCalculationOutputRepository
-from schemas.salary_agent import SalaryAgentOutput, SalaryAgent, SalaryAgentConfig, SalaryAgentInput, MainSalaryAgentData
+from schemas.salary_agent import SalaryAgentOutput, SalaryAgent, SalaryAgentConfig, SalaryAgentInput, MainSalaryAgentData, JobXEducationLevel 
 from schemas.base_classifier import JobClassificationOutput
 from src.agent.agent import AgentProcessor
 from src.service.paylab_data_converter import PaylabDataConverter
 
 from pydantic_ai import BinaryContent
+from typing import List
 import asyncio
 import sys
 import json
@@ -82,6 +83,22 @@ async def functional_salary():
         print("----")
 
         if result:
+       
+            experience_salary_breakdown = "["
+            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+            for item in experience_salary_breakdown_list:
+                education_level = item.experience_level
+                min_salary = item.salary_min
+                max_salary = item.salary_max
+                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                #dump experience salary breakdown into json string
+                experience_salary_breakdown += json.dumps({
+                    "education_level": education_level,
+                    "min_salary": min_salary,
+                    "max_salary": max_salary
+                }, ensure_ascii=False) + ","
+
+            experience_salary_breakdown += "]"
 
             data_output = {
                 "title": function,
@@ -90,6 +107,7 @@ async def functional_salary():
                 "max_salary": result.max_salary,
                 "average_salary": result.average_salary,
                 "job_count": details.get("count", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
                 "zangia_count": details.get("zangia", 0),
                 "lambda_count": details.get("lambda", 0),
                 "type": "function",
@@ -130,6 +148,21 @@ async def industry_salary():
         print("----")
 
         if result:
+            experience_salary_breakdown = "["
+            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+            for item in experience_salary_breakdown_list:
+                education_level = item.experience_level
+                min_salary = item.salary_min
+                max_salary = item.salary_max
+                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                #dump experience salary breakdown into json string
+                experience_salary_breakdown += json.dumps({
+                    "education_level": education_level,
+                    "min_salary": min_salary,
+                    "max_salary": max_salary
+                }, ensure_ascii=False) + ","
+
+            experience_salary_breakdown += "]"
 
             data_output = {
                 "title": industry,
@@ -140,6 +173,7 @@ async def industry_salary():
                 "job_count": details.get("count", 0),
                 "zangia_count": details.get("zangia", 0),
                 "lambda_count": details.get("lambda", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
                 "type": "industry",
                 "year": 2025,
                 "month": 2,
@@ -177,6 +211,21 @@ async def job_level_salary():
         print("----")
 
         if result:
+            experience_salary_breakdown = "["
+            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+            for item in experience_salary_breakdown_list:
+                education_level = item.experience_level
+                min_salary = item.salary_min
+                max_salary = item.salary_max
+                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                #dump experience salary breakdown into json string
+                experience_salary_breakdown += json.dumps({
+                    "education_level": education_level,
+                    "min_salary": min_salary,
+                    "max_salary": max_salary
+                }, ensure_ascii=False) + ","
+
+            experience_salary_breakdown += "]"
 
             data_output = {
                 "title": job_level,
@@ -187,6 +236,7 @@ async def job_level_salary():
                 "job_count": details.get("count", 0),
                 "zangia_count": details.get("zangia", 0),
                 "lambda_count": details.get("lambda", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
                 "type": "job_level",
                 "year": 2025,
                 "month": 2,
@@ -224,7 +274,21 @@ async def techpack_category_salary():
         print("----")
 
         if result:
+            experience_salary_breakdown = "["
+            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+            for item in experience_salary_breakdown_list:
+                education_level = item.experience_level
+                min_salary = item.salary_min
+                max_salary = item.salary_max
+                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                #dump experience salary breakdown into json string
+                experience_salary_breakdown += json.dumps({
+                    "education_level": education_level,
+                    "min_salary": min_salary,
+                    "max_salary": max_salary
+                }, ensure_ascii=False) + ","
 
+            experience_salary_breakdown += "]"
             data_output = {
                 "title": techpack_category,
                 "reasoning": result.reasoning, 
@@ -234,6 +298,7 @@ async def techpack_category_salary():
                 "job_count": details.get("count", 0),
                 "zangia_count": details.get("zangia", 0),
                 "lambda_count": details.get("lambda", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
                 "type": "techpack_category",
                 "year": 2025,
                 "month": 2,
@@ -390,6 +455,25 @@ async def all_salary():
     print(jl_result)
     print("----")
     if jl_result:
+        is_experience_salary_breakdown = True
+       
+        experience_salary_breakdown = "["
+        if is_experience_salary_breakdown:
+            experience_salary_breakdown_list = jl_result.experience_salary_breakdown
+            for item in experience_salary_breakdown_list:
+                education_level = getattr(item, "education_level", None)
+                min_salary = getattr(item, "min_salary", None)
+                max_salary = getattr(item, "max_salary", None)
+                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                #dump experience salary breakdown into json string
+                experience_salary_breakdown += json.dumps({
+                    "education_level": education_level,
+                    "min_salary": min_salary,
+                    "max_salary": max_salary
+                }, ensure_ascii=False) + ","
+
+        experience_salary_breakdown += "]"
+
         data_output = {
             "title": "All Job Level Salary Analysis",
             "reasoning": jl_result.reasoning, 
@@ -464,9 +548,9 @@ async def all_salary():
 
 async def main():
     """Main function to run all salary calculations sequentially."""
-    # await functional_salary()
-    # await industry_salary()  
-    # await job_level_salary()
+    await functional_salary()
+    await industry_salary()  
+    await job_level_salary()
     await techpack_category_salary()
     # await all_salary()
 

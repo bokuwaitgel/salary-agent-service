@@ -9,7 +9,9 @@ Run:
 import os
 import io
 import uuid
-from typing import Dict, List, Optional
+import json
+import re
+from typing import Dict, List, Optional, Any, TypedDict, SupportsFloat, SupportsIndex, cast
 
 import dash
 import pandas as pd
@@ -128,6 +130,12 @@ TYPE_LABELS = {
 ALL_TITLES_VALUE = "__all__"
 
 
+class ExperienceBreakdownItem(TypedDict):
+    experience_level: str
+    min_salary: float
+    max_salary: float
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -165,6 +173,138 @@ def _empty_figure(message: str) -> go.Figure:
         margin={"l": 20, "r": 20, "t": 40, "b": 20},
     )
     return fig
+
+
+def _experience_level_sort_key(level: str) -> float:
+    if not level:
+        return float("inf")
+    match = re.search(r"\d+(?:\.\d+)?", str(level))
+    if match:
+        try:
+            return float(match.group(0))
+        except ValueError:
+            return float("inf")
+    return float("inf")
+
+
+def _to_float(value: object) -> Optional[float]:
+    if value is None:
+        return None
+
+    if not isinstance(value, (str, bytes, bytearray, int, float)) and not hasattr(value, "__float__") and not hasattr(value, "__index__"):
+        return None
+
+    try:
+        parsed = float(cast(SupportsFloat | SupportsIndex | str | bytes | bytearray, value))
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(parsed):
+        return None
+    return parsed
+
+
+def _parse_experience_breakdown(raw_value: object) -> List[ExperienceBreakdownItem]:
+    if raw_value is None or (isinstance(raw_value, float) and pd.isna(raw_value)):
+        return []
+
+    payload = raw_value
+    if not isinstance(payload, (list, tuple)):
+        text = str(payload).strip()
+        if not text:
+            return []
+
+        candidates = [text]
+        candidates.append(text.replace('""', '"'))
+        candidates.append(re.sub(r",\s*([\]}])", r"\1", text.replace('""', '"')))
+
+        payload = None
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                payload = parsed
+                break
+            except (TypeError, ValueError):
+                continue
+
+    if not isinstance(payload, (list, tuple)):
+        return []
+
+    cleaned: List[ExperienceBreakdownItem] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        typed_item = item if isinstance(item, dict) else {}
+        level = typed_item.get("education_level") or typed_item.get("experience_level") or typed_item.get("level")
+        min_salary = _to_float(typed_item.get("min_salary"))
+        max_salary = _to_float(typed_item.get("max_salary"))
+        if level is None or min_salary is None or max_salary is None:
+            continue
+        cleaned.append(
+            {
+                "experience_level": str(level),
+                "min_salary": min_salary,
+                "max_salary": max_salary,
+            }
+        )
+
+    cleaned.sort(key=lambda x: _experience_level_sort_key(x["experience_level"]))
+    return cleaned
+
+
+def _format_experience_breakdown_for_table(raw_value: object) -> str:
+    items = _parse_experience_breakdown(raw_value)
+    if not items:
+        return ""
+    parts = [
+        f"{item['experience_level']}: {_format_mnt(item['min_salary'])} - {_format_mnt(item['max_salary'])}"
+        for item in items
+    ]
+    return " ; ".join(parts)
+
+
+def _build_experience_breakdown_table(df: pd.DataFrame, is_all_selected: bool = False):
+    if df.empty or "experience_salary_breakdown" not in df.columns:
+        return [], []
+
+    records: List[Dict[str, object]] = []
+    for _, row in df.iterrows():
+        title = row.get("title")
+        for item in _parse_experience_breakdown(row.get("experience_salary_breakdown")):
+            records.append(
+                {
+                    "Ажлын ангилал": title,
+                    "Туршлага (жил)": item["experience_level"],
+                    "Доод цалин": int(item["min_salary"]),
+                    "Дээд цалин": int(item["max_salary"]),
+                    "_order": _experience_level_sort_key(item["experience_level"]),
+                }
+            )
+
+    if not records:
+        return [], []
+
+    exp_df = pd.DataFrame(records)
+
+    if is_all_selected:
+        exp_df = (
+            exp_df.groupby("Туршлага (жил)", as_index=False)
+            .agg(
+                _order=("_order", "min"),
+                **{
+                    "Доод цалин": ("Доод цалин", "mean"),
+                    "Дээд цалин": ("Дээд цалин", "mean"),
+                },
+            )
+            .sort_values("_order")
+        )
+        exp_df["Доод цалин"] = exp_df["Доод цалин"].round().astype(int)
+        exp_df["Дээд цалин"] = exp_df["Дээд цалин"].round().astype(int)
+        exp_df = exp_df[["Туршлага (жил)", "Доод цалин", "Дээд цалин"]]
+    else:
+        exp_df = exp_df.sort_values(["Ажлын ангилал", "_order"]).drop(columns=["_order"])
+
+    columns = [{"name": col, "id": col} for col in exp_df.columns]
+    return exp_df.to_dict("records"), columns
 
 
 def _latest_per_title(df: pd.DataFrame) -> pd.DataFrame:
@@ -251,7 +391,7 @@ def _build_kpi_cards(df: pd.DataFrame) -> List[html.Div]:
     ]
 
 
-def _render_chat(history: List[Dict[str, str]]) -> List[html.Div]:
+def _render_chat(history: List[Dict[str, object]]) -> List[html.Div]:
     if not history:
         return [
             html.Div(
@@ -262,10 +402,32 @@ def _render_chat(history: List[Dict[str, str]]) -> List[html.Div]:
     items = []
     for item in history:
         is_user = item.get("role") == "user"
+        is_pending = bool(item.get("pending"))
         bubble_color = COLORS["primary"] if is_user else COLORS["card"]
         text_color = "white" if is_user else COLORS["text"]
         align = "flex-end" if is_user else "flex-start"
         role_label = "Та" if is_user else "AI туслах"
+        content = item.get("content", "")
+
+        if is_pending and not is_user:
+            content_component = html.Div(
+                [
+                    html.Span(className="typing-dot"),
+                    html.Span(className="typing-dot"),
+                    html.Span(className="typing-dot"),
+                ],
+                className="typing-indicator",
+            )
+        else:
+            content_component = html.Div(
+                str(content),
+                style={
+                    "whiteSpace": "pre-wrap",
+                    "lineHeight": "1.4",
+                    "color": text_color,
+                },
+            )
+
         items.append(
             html.Div(
                 [
@@ -278,14 +440,7 @@ def _render_chat(history: List[Dict[str, str]]) -> List[html.Div]:
                             "color": "#E2E8F0" if is_user else COLORS["muted"],
                         },
                     ),
-                    html.Div(
-                        item.get("content", ""),
-                        style={
-                            "whiteSpace": "pre-wrap",
-                            "lineHeight": "1.4",
-                            "color": text_color,
-                        },
-                    )
+                    content_component,
                 ],
                 style={
                     "alignSelf": align,
@@ -357,6 +512,29 @@ app.layout = html.Div(
                                     style={"display": "block", "color": COLORS["text"], "marginBottom": "8px", "fontWeight": "bold"},
                                 ),
                                 dcc.Dropdown(id="title-filter", placeholder="Сонголт хийх", clearable=False),
+                            ],
+                        ),
+                        html.Div(
+                            id="experience-breakdown-table-card",
+                            className="card",
+                            style={**CARD_STYLE, "marginTop": "-4px"},
+                            children=[
+                                html.H3("Туршлагаар цалингийн хүснэгт", style={"color": COLORS["dark"], "marginTop": 0}),
+                                dcc.Loading(
+                                    type="dot",
+                                    color=COLORS["primary"],
+                                    children=dash_table.DataTable(
+                                        id="experience-breakdown-table",
+                                        page_size=8,
+                                        style_table={"overflowX": "auto"},
+                                        style_cell={"textAlign": "left", "padding": "8px", "fontFamily": "Arial"},
+                                        style_header={
+                                            "backgroundColor": COLORS["secondary"],
+                                            "color": "white",
+                                            "fontWeight": "bold",
+                                        },
+                                    ),
+                                ),
                             ],
                         ),
                         html.Div(
@@ -467,28 +645,24 @@ app.layout = html.Div(
                                         html.Button("Сарын чиг хандлага", id="quick-q-trend", n_clicks=0, type="button", className="chat-chip-btn"),
                                     ],
                                 ),
-                                dcc.Loading(
-                                    type="circle",
-                                    color=COLORS["primary"],
-                                    children=html.Div(
-                                        id="chat-output",
-                                        children=_render_chat(
-                                            [{"role": "assistant", "content": "Сайн байна уу! Танд юугаар туслах вэ?"}]
-                                        ),
-                                        style={
-                                            "flex": "1",
-                                            "minHeight": "360px",
-                                            "maxHeight": "420px",
-                                            "overflowY": "auto",
-                                            "display": "flex",
-                                            "flexDirection": "column",
-                                            "gap": "4px",
-                                            "padding": "8px",
-                                            "backgroundColor": "#F8FAFC",
-                                            "borderRadius": "12px",
-                                            "border": f"1px solid {COLORS['muted']}20",
-                                        },
+                                html.Div(
+                                    id="chat-output",
+                                    children=_render_chat(
+                                        [{"role": "assistant", "content": "Сайн байна уу! Танд юугаар туслах вэ?"}]
                                     ),
+                                    style={
+                                        "flex": "1",
+                                        "minHeight": "360px",
+                                        "maxHeight": "420px",
+                                        "overflowY": "auto",
+                                        "display": "flex",
+                                        "flexDirection": "column",
+                                        "gap": "4px",
+                                        "padding": "8px",
+                                        "backgroundColor": "#F8FAFC",
+                                        "borderRadius": "12px",
+                                        "border": f"1px solid {COLORS['muted']}20",
+                                    },
                                 ),
                                 html.Div(style={"height": "12px"}),
                                 dcc.Input(
@@ -588,6 +762,8 @@ def ensure_session_id(n_intervals: int, session_id: Optional[str]):
     Output("trend-line", "figure"),
     Output("source-pie", "figure"),
     Output("avg-scatter", "figure"),
+    Output("experience-breakdown-table", "data"),
+    Output("experience-breakdown-table", "columns"),
     Output("detail-table", "data"),
     Output("detail-table", "columns"),
     Input("type-selector", "value"),
@@ -597,14 +773,14 @@ def ensure_session_id(n_intervals: int, session_id: Optional[str]):
 def update_charts(selected_type: str, selected_title: Optional[str], n_intervals: int):
     if not selected_type:
         empty = _empty_figure("No data available")
-        return _build_kpi_cards(pd.DataFrame()), empty, empty, empty, empty, empty, empty, [], []
+        return _build_kpi_cards(pd.DataFrame()), empty, empty, empty, empty, empty, empty, [], [], [], []
 
     df_all = _load_data_main()
     df_all = _filter_by_type(df_all, selected_type)
     df_all = _exclude_all_titles(df_all)
     if df_all.empty:
         empty = _empty_figure("No data available")
-        return _build_kpi_cards(df_all), empty, empty, empty, empty, empty, empty, [], []
+        return _build_kpi_cards(df_all), empty, empty, empty, empty, empty, empty, [], [], [], []
 
     df_latest = _latest_per_title(df_all)
 
@@ -628,7 +804,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
     chart_df_latest = df_selected_latest.copy()
     if chart_df_latest.empty:
         empty = _empty_figure("No data available")
-        return kpis, empty, empty, empty, empty, empty, empty, [], []
+        return kpis, empty, empty, empty, empty, empty, empty, [], [], [], []
 
     bar_df = chart_df_latest.groupby("title", as_index=False)["average_salary"].mean()
     bar_df["title_short"] = bar_df["title"].apply(_shorten_label)
@@ -752,7 +928,14 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
     else:
         avg_scatter = _empty_figure("No time series data")
 
+    experience_table_data, experience_table_columns = _build_experience_breakdown_table(
+        chart_df_latest,
+        is_all_selected=is_all_selected,
+    )
+
     table_df = chart_df_latest.copy()
+    if "experience_salary_breakdown" in table_df.columns:
+        table_df["experience_salary_breakdown"] = table_df["experience_salary_breakdown"].apply(_format_experience_breakdown_for_table)
     table_df = table_df.rename(
         columns={
             "title": "Ажлын ангилал",
@@ -762,6 +945,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
             "job_count": "Зарын тоо",
             "zangia_count": "Zangia",
             "lambda_count": "Lambda",
+            "experience_salary_breakdown": "Туршлагаар цалин",
         }
     )
     table_columns = [
@@ -774,6 +958,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
             "Зарын тоо",
             "Zangia",
             "Lambda",
+            "Туршлагаар цалин",
         ]
         if col in table_df.columns
     ]
@@ -782,7 +967,19 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
     for fig in [bar_fig, range_fig, count_fig, trend_fig, source_fig, avg_scatter]:
         fig.update_layout(transition={"duration": 300, "easing": "cubic-in-out"})
 
-    return kpis, bar_fig, range_fig, count_fig, trend_fig, source_fig, avg_scatter, table_data, table_columns
+    return (
+        kpis,
+        bar_fig,
+        range_fig,
+        count_fig,
+        trend_fig,
+        source_fig,
+        avg_scatter,
+        experience_table_data,
+        experience_table_columns,
+        table_data,
+        table_columns,
+    )
 
 
 @callback(
@@ -792,6 +989,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
     Output("trend-line-card", "className"),
     Output("source-pie-card", "className"),
     Output("avg-scatter-card", "className"),
+    Output("experience-breakdown-table-card", "className"),
     Output("table-card", "className"),
     Input("salary-bar", "loading_state"),
     Input("salary-range", "loading_state"),
@@ -799,6 +997,7 @@ def update_charts(selected_type: str, selected_title: Optional[str], n_intervals
     Input("trend-line", "loading_state"),
     Input("source-pie", "loading_state"),
     Input("avg-scatter", "loading_state"),
+    Input("experience-breakdown-table", "loading_state"),
     Input("detail-table", "loading_state"),
 )
 def update_loading_skeleton(*states):
@@ -874,6 +1073,22 @@ def apply_quick_question(n_salary: int, n_top: int, n_trend: int):
 
 
 @callback(
+    Output("chat-send", "disabled"),
+    Output("chat-input", "disabled"),
+    Output("quick-q-salary", "disabled"),
+    Output("quick-q-top", "disabled"),
+    Output("quick-q-trend", "disabled"),
+    Output("chat-send", "children"),
+    Input("chat-store", "data"),
+)
+def set_chat_loading_state(history: Optional[List[Dict[str, object]]]):
+    history = history or []
+    is_loading = any(bool(item.get("pending")) for item in history if isinstance(item, dict))
+    send_text = "Хариу бичиж байна..." if is_loading else "Send"
+    return is_loading, is_loading, is_loading, is_loading, is_loading, send_text
+
+
+@callback(
     Output("chat-store", "data"),
     Output("chat-output", "children"),
     Output("chat-input", "value"),
@@ -888,7 +1103,7 @@ def handle_chat(
     n_clicks: int,
     message: Optional[str],
     session_id: Optional[str],
-    history: List[Dict[str, str]],
+    history: List[Dict[str, object]],
 ):
     if not message or not message.strip():
         return history, _render_chat(history), "", None
@@ -906,9 +1121,7 @@ def handle_chat(
     ]
 
     request_payload = {"session_id": session_value, "message": message.strip()}
-    # Remove 'pending' key for rendering
-    clean_history: List[Dict[str, str]] = [{k: v for k, v in item.items() if k != "pending" and isinstance(v, str)} for item in updated_history]
-    return updated_history, _render_chat(clean_history), "", request_payload
+    return updated_history, _render_chat(updated_history), "", request_payload
 
 
 @callback(
@@ -918,7 +1131,7 @@ def handle_chat(
     State("chat-store", "data"),
     prevent_initial_call=True,
 )
-def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: List[Dict[str, str]]):
+def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: List[Dict[str, object]]):
     if not request_payload:
         return history, _render_chat(history)
 

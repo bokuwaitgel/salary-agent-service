@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
 
 
-from schemas.base_classifier import JobRequirement
+from schemas.base_classifier import JobRequirement, ExperienceLevel
 
 
 
@@ -34,10 +34,10 @@ class SalaryAgentInput(BaseModel):
 
 class JobXEducationLevel(BaseModel):
     """Structured data for job experience x salary analysis."""
-    experience_level: str = Field(..., description="Experience level category (e.g., Entry 0-2 years, Junior 2-4 years, Intermediate 4-7 years, Senior 7-12 years, Expert 12+ years). This is a key driver of salary differences within the same role.")
+    experience_level: ExperienceLevel = Field(..., description="Experience level category (e.g., Entry 0-2 years, Junior 2-4 years, Intermediate 4-7 years, Senior 7-12 years, Expert 12+ years). This is a key driver of salary differences within the same role.")
     # education_level: str = Field(..., description="Education level category (e.g., High School, Bachelor's, Master's, PhD). Higher education levels typically command higher salaries, especially in technical and managerial roles.")
-    salary_min: Optional[int] = Field(None, description="Stated minimum salary in MNT for this experience level. Use as a reference point but validate against market data.")
-    salary_max: Optional[int] = Field(None, description="Stated maximum salary in MNT for this experience level. Use as a reference point but validate against market data.")
+    salary_min: int = Field(..., description="Stated minimum salary in MNT for this experience level. Use as a reference point but validate against market data.")
+    salary_max: int = Field(..., description="Stated maximum salary in MNT for this experience level. Use as a reference point but validate against market data.")
 class SalaryAgentOutput(BaseModel):
     """Output data for salary analysis with market-validated estimates."""
     reasoning: str = Field(..., description="Clear 2-4 sentence explanation covering: (1) key factors driving the estimate (job level, industry, experience), (2) how provided market data was used, (3) any adjustments made and why. Cite specific data points when available.")
@@ -89,7 +89,7 @@ class SalaryAgentConfig(BaseModel):
             "Natural, conversational guidance for accurate salary analysis in the Mongolian market."
         )
     )
-    model_name: str = Field(default="google-gla:gemini-3-pro-preview", description="Name of the language model to use for salary estimation.")
+    model_name: str = Field(default="google-gla:gemini-2.5-flash", description="Name of the language model to use for salary estimation.")
 
 class SalaryAgent(Agent):
     config: SalaryAgentConfig

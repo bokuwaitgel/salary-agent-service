@@ -23,10 +23,9 @@ async def main():
     repository: LambdaJobRepository = dep
     classifier_output_repository: JobClassificationOutputRepository = dep_classifier_output
     datas = repository.get_all()
+    datas = datas[300:]
 
     print(f"Total jobs in database: {len(datas)}")
-    datas = datas[100:]
-
     #prepare data for classification
     classification_input = []
     for data in datas:
