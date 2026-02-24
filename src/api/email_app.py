@@ -39,6 +39,14 @@ class SalaryReportRequest(BaseModel):
     type: Optional[str] = Field("function", description="Type filter: function, job_level, industry, or techpack_category")
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="User chat message")
+
+
+class ChatResponse(BaseModel):
+    response: str
+
+
 def _format_requirements(requirements: List[object]) -> str:
     if not requirements:
         return ""
@@ -275,6 +283,64 @@ def _build_salary_excel(type_filter: str = "function", title_filter: Optional[st
     return buffer.read()
 
 
+def _format_mnt(value: Optional[float]) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:,.0f} ₮"
+
+
+def _build_chat_answer(message: str) -> str:
+    text = (message or "").strip().lower()
+
+    engine = create_engine(
+        os.getenv("DATABASE_URI", "sqlite:///products.db"),
+        pool_pre_ping=True,
+    )
+    df = pd.read_sql("SELECT * FROM salary_calculation_output ORDER BY created_at DESC", engine)
+
+    if df.empty:
+        return "Одоогоор өгөгдөл алга байна."
+
+    if "title" in df.columns:
+        df = df[~df["title"].astype(str).str.startswith("All ")]
+
+    if "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+
+    for col in ["average_salary", "min_salary", "max_salary", "year", "month"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "дундаж" in text and "цалин" in text and "хамгийн" not in text:
+        return f"Одоогийн нийт дундаж цалин: {_format_mnt(df['average_salary'].mean() if 'average_salary' in df.columns else None)}"
+
+    if "хамгийн" in text and ("өндөр" in text or "их" in text):
+        latest = df
+        if "created_at" in latest.columns and latest["created_at"].notna().any() and "title" in latest.columns:
+            latest = latest.sort_values("created_at").drop_duplicates(subset=["title"], keep="last")
+        if latest.empty or "average_salary" not in latest.columns:
+            return "Хамгийн өндөр цалингийн мэдээлэл олдсонгүй."
+        row = latest.sort_values("average_salary", ascending=False).iloc[0]
+        return f"Хамгийн өндөр дундаж цалинтай ангилал: {row.get('title', 'N/A')} — {_format_mnt(row.get('average_salary'))}"
+
+    if "хандлага" in text or "trend" in text or "сар" in text:
+        if "year" in df.columns and "month" in df.columns and "average_salary" in df.columns:
+            trend_df = df.dropna(subset=["year", "month"]).copy()
+            if trend_df.empty:
+                return "Сарын хандлагын өгөгдөл хүрэлцэхгүй байна."
+            trend_df["period"] = trend_df.apply(lambda x: f"{int(x['year'])}-{int(x['month']):02d}", axis=1)
+            trend = trend_df.groupby("period", as_index=False)["average_salary"].mean()
+            if len(trend) < 2:
+                return "Хандлага тооцоолох өгөгдөл бага байна."
+            prev_v = float(trend.iloc[-2]["average_salary"])
+            last_v = float(trend.iloc[-1]["average_salary"])
+            direction = "өссөн" if last_v >= prev_v else "буурсан"
+            return f"Сүүлийн сард дундаж цалин {direction}: {_format_mnt(prev_v)} → {_format_mnt(last_v)}"
+        return "Сарын хандлагын өгөгдөл хүрэлцэхгүй байна."
+
+    return "Асуултаа 'дундаж цалин', 'хамгийн өндөр', эсвэл 'сарын хандлага' гэж тодруулж асуугаарай."
+
+
 def _send_email(to_email: str, subject: str, attachment: bytes, filename: str) -> None:
     sender_email = os.getenv("SENDER_EMAIL", "itgel6708@gmail.com")
     app_password = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -370,3 +436,12 @@ async def email_salary_report(request: SalaryReportRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {"status": "sent", "to": request.to_email, "filename": filename}
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest) -> ChatResponse:
+    try:
+        answer = _build_chat_answer(request.message)
+        return ChatResponse(response=answer)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

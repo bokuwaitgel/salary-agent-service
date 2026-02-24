@@ -1,4 +1,4 @@
-from git import List
+from typing import List
 
 from src.service.lambda_global import get_all_data_and_save
 from src.dependencies import get_lambda_sqlalchemy_repository, get_classifier_output_repository
