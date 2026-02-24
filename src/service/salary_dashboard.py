@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import ast
 import time
 import uuid
 from pathlib import Path
@@ -104,7 +105,7 @@ def _load_data_main() -> pd.DataFrame:
     return df.copy()
 
 
-def _load_jobs_raw(limit: int = 3000) -> pd.DataFrame:
+def _load_jobs_raw(limit: int = 10000) -> pd.DataFrame:
     global _JOBS_DATA_CACHE, _JOBS_DATA_CACHE_TS
 
     now = time.time()
@@ -112,8 +113,25 @@ def _load_jobs_raw(limit: int = 3000) -> pd.DataFrame:
         return _JOBS_DATA_CACHE.head(limit).copy()
 
     try:
-        query = f"SELECT * FROM job_classification_output ORDER BY created_at DESC LIMIT {int(limit)}"
-        df = pd.read_sql(query, _engine())
+        engine = _engine()
+        queries = [
+            f"SELECT * FROM job_classification_output ORDER BY created_at DESC LIMIT {int(limit)}",
+            f"SELECT * FROM job_classification_output ORDER BY id DESC LIMIT {int(limit)}",
+            f"SELECT * FROM job_classification_output LIMIT {int(limit)}",
+        ]
+
+        df = pd.DataFrame()
+        for query in queries:
+            try:
+                df = pd.read_sql(query, engine)
+                if not df.empty:
+                    break
+            except Exception:
+                continue
+
+        if df.empty:
+            return pd.DataFrame()
+
         _JOBS_DATA_CACHE = df
         _JOBS_DATA_CACHE_TS = now
         return df.copy()
@@ -242,6 +260,67 @@ def _format_grouped_number(value: object) -> str:
     if NUMBER_GROUP_SEPARATOR == ".":
         return text.replace(",", ".")
     return text
+
+
+def _format_jobs_cell_value(value: object) -> object:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text == "[]":
+            return ""
+
+        if text.startswith("[") or text.startswith("{"):
+            parsed: object = value
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                try:
+                    parsed = ast.literal_eval(text)
+                except (ValueError, SyntaxError):
+                    parsed = value
+
+            if parsed is not value:
+                return _format_jobs_cell_value(parsed)
+
+        return value
+
+    if isinstance(value, list):
+        if not value:
+            return ""
+
+        if all(isinstance(item, dict) for item in value):
+            parts: List[str] = []
+            for item in value:
+                d = cast(Dict[str, object], item)
+                name = str(d.get("name", "")).strip()
+                details = str(d.get("details", d.get("description", ""))).strip()
+                importance = str(d.get("importance", "")).strip()
+
+                segment = ""
+                if name and details:
+                    segment = f"{name}: {details}"
+                elif name:
+                    segment = name
+                elif details:
+                    segment = details
+
+                if importance:
+                    segment = f"{segment} ({importance})" if segment else importance
+
+                if segment:
+                    parts.append(segment)
+
+            if parts:
+                return " ; ".join(parts)
+
+        return " ; ".join(str(item) for item in value if str(item).strip())
+
+    if isinstance(value, dict):
+        d = cast(Dict[str, object], value)
+        if "min" in d and "max" in d and len(d) <= 3:
+            return f"min: {d.get('min')} / max: {d.get('max')}"
+        return " ; ".join(f"{k}: {v}" for k, v in d.items())
+
+    return value
 
 
 def _format_experience_breakdown_for_table(raw_value: object) -> str:
@@ -692,26 +771,82 @@ def _jobs_list_layout() -> html.Div:
                 ],
             ),
             dcc.Interval(id="jobs-interval", interval=120000, n_intervals=0),
+            dcc.Download(id="jobs-excel-download"),
             html.Div(
-                className="card",
+                className="card jobs-filter-card",
                 children=[
-                    html.Div(className="filter-grid", children=[
-                        html.Div(children=[html.Label("Хайлт", className="field-label"), dcc.Input(id="jobs-search", type="text", placeholder="Гарчиг, компани, салбар...", className="chat-input-line")]),
-                        html.Div(children=[html.Label("Эх сурвалж", className="field-label"), dcc.Dropdown(id="jobs-source", options=[], placeholder="Бүгд", clearable=True)]),
-                    ]),
+                    html.Div(
+                        className="jobs-filter-grid",
+                        children=[
+                            html.Div(
+                                children=[
+                                    html.Label("Хайлт", className="field-label"),
+                                    dcc.Input(
+                                        id="jobs-search",
+                                        type="text",
+                                        placeholder="Гарчиг, компани, requirement...",
+                                        className="jobs-search-input",
+                                    ),
+                                ]
+                            ),
+                            html.Div(children=[html.Label("Эх сурвалж", className="field-label"), dcc.Dropdown(id="jobs-source", options=[], placeholder="Бүгд", clearable=True)]),
+                            html.Div(children=[html.Label("Функц", className="field-label"), dcc.Dropdown(id="jobs-function", options=[], placeholder="Бүгд", clearable=True)]),
+                            html.Div(children=[html.Label("Салбар", className="field-label"), dcc.Dropdown(id="jobs-industry", options=[], placeholder="Бүгд", clearable=True)]),
+                            html.Div(children=[html.Label("Түвшин", className="field-label"), dcc.Dropdown(id="jobs-level", options=[], placeholder="Бүгд", clearable=True)]),
+                            html.Div(children=[html.Label("Компани", className="field-label"), dcc.Dropdown(id="jobs-company", options=[], placeholder="Бүгд", clearable=True)]),
+                        ],
+                    ),
                 ],
             ),
             html.Div(
                 className="card",
                 children=[
+                    html.Div(
+                        className="section-header",
+                        children=[
+                            html.Div(id="jobs-count", className="jobs-count", children="Нийт мөр: 0"),
+                            html.Button("Excel татах", id="download-jobs-excel", n_clicks=0, className="btn-primary"),
+                        ],
+                    ),
                     dash_table.DataTable(
                         id="jobs-table",
-                        page_size=15,
+                        page_action="none",
                         sort_action="native",
                         filter_action="none",
-                        style_table={"overflowX": "auto"},
-                        style_cell={"textAlign": "left", "padding": "8px", "fontFamily": "Inter, Arial", "maxWidth": "260px", "whiteSpace": "normal"},
-                        style_header={"backgroundColor": "#dbeafe", "fontWeight": "bold"},
+                        style_table={"overflowX": "auto", "overflowY": "visible", "maxHeight": "none"},
+                        style_cell={
+                            "textAlign": "left",
+                            "padding": "8px",
+                            "fontFamily": "Inter, Arial",
+                            "maxWidth": "420px",
+                            "whiteSpace": "pre-line",
+                            "wordBreak": "break-word",
+                            "height": "auto",
+                        },
+                        style_data_conditional=[
+                            {
+                                "if": {"column_id": "salary_min"},
+                                "minWidth": "130px",
+                                "width": "130px",
+                                "maxWidth": "130px",
+                                "whiteSpace": "nowrap",
+                                "textAlign": "right",
+                            },
+                            {
+                                "if": {"column_id": "salary_max"},
+                                "minWidth": "130px",
+                                "width": "130px",
+                                "maxWidth": "130px",
+                                "whiteSpace": "nowrap",
+                                "textAlign": "right",
+                            },
+                        ],
+                        style_header={
+                            "backgroundColor": "#dbeafe",
+                            "fontWeight": "bold",
+                            "whiteSpace": "pre-line",
+                            "wordBreak": "break-word",
+                        },
                     )
                 ],
             ),
@@ -828,57 +963,92 @@ def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: Opti
 
 @callback(
     Output("jobs-source", "options"),
+    Output("jobs-function", "options"),
+    Output("jobs-industry", "options"),
+    Output("jobs-level", "options"),
+    Output("jobs-company", "options"),
+    Output("jobs-count", "children"),
     Output("jobs-table", "data"),
     Output("jobs-table", "columns"),
     Input("jobs-search", "value"),
     Input("jobs-source", "value"),
+    Input("jobs-function", "value"),
+    Input("jobs-industry", "value"),
+    Input("jobs-level", "value"),
+    Input("jobs-company", "value"),
     Input("jobs-interval", "n_intervals"),
 )
-def update_jobs_list(search: Optional[str], source: Optional[str], n_intervals: int):
-    df = _load_jobs_raw()
+def update_jobs_list(
+    search: Optional[str],
+    source: Optional[str],
+    selected_function: Optional[str],
+    selected_industry: Optional[str],
+    selected_level: Optional[str],
+    selected_company: Optional[str],
+    n_intervals: int,
+):
+    df = _load_jobs_raw(limit=10000)
     if df.empty:
-        return [], [], []
+        return [], [], [], [], [], "Нийт мөр: 0", [], []
 
-    source_col = _first_existing_col(df, ["source", "platform", "site_name", "website"])
+    source_col = _first_existing_col(df, ["source_job", "source", "platform", "site_name", "website"])
+    function_col = _first_existing_col(df, ["job_function"])
+    industry_col = _first_existing_col(df, ["job_industry"])
+    level_col = _first_existing_col(df, ["job_level"])
+    company_col = _first_existing_col(df, ["company_name"])
 
-    # Show full table from job_classification_output with common columns first.
-    priority = [
-        "id",
-        "created_at",
+    # Show requested job_classification_output columns.
+    requested_columns = [
         "title",
-        "job_title",
+        "source_job",
         "company_name",
-        "company",
-        "source",
-        "platform",
-        "site_name",
-        "location",
-        "city",
-        "job_function",
-        "job_industry",
         "job_level",
-        "job_techpack_category",
+        "experience_level",
+        "education_level",
         "salary_min",
         "salary_max",
+        "requirement_reasoning",
+        "requirements",
+        "benefits_reasoning",
+        "benefits",
+        "job_function",
+        "job_industry",
+        "job_techpack_category",
     ]
-    ordered_cols = [c for c in priority if c in df.columns] + [c for c in df.columns if c not in priority]
+    ordered_cols = [c for c in requested_columns if c in df.columns]
+    if not ordered_cols:
+        ordered_cols = df.columns.tolist()
     view_df = df[ordered_cols].copy()
 
-    # Convert non-scalar values to readable strings for DataTable rendering.
+    def _option_list(frame: pd.DataFrame, col: Optional[str]) -> List[Dict[str, str]]:
+        if not col or col not in frame.columns:
+            return []
+        return [
+            {"label": str(v), "value": str(v)}
+            for v in sorted(frame[col].dropna().astype(str).unique().tolist())
+            if str(v).strip()
+        ]
+
+    source_options = _option_list(view_df, source_col)
+    function_options = _option_list(view_df, function_col)
+    industry_options = _option_list(view_df, industry_col)
+    level_options = _option_list(view_df, level_col)
+    company_options = _option_list(view_df, company_col)
+
+    def _eq_filter(frame: pd.DataFrame, col: Optional[str], value: Optional[str]) -> pd.DataFrame:
+        if not value or not col or col not in frame.columns:
+            return frame
+        return frame[frame[col].astype(str) == str(value)]
+
+    view_df = _eq_filter(view_df, source_col, source)
+    view_df = _eq_filter(view_df, function_col, selected_function)
+    view_df = _eq_filter(view_df, industry_col, selected_industry)
+    view_df = _eq_filter(view_df, level_col, selected_level)
+    view_df = _eq_filter(view_df, company_col, selected_company)
+
+    # Convert values for table rendering (human-readable).
     for col in view_df.columns:
-        view_df[col] = view_df[col].apply(
-            lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
-        )
-
-    if "created_at" in view_df.columns:
-        view_df["created_at"] = pd.to_datetime(view_df["created_at"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
-
-    source_options: List[Dict[str, str]] = []
-    if source_col and source_col in view_df.columns:
-        source_options = [{"label": str(s), "value": str(s)} for s in sorted(view_df[source_col].dropna().astype(str).unique().tolist())]
-
-    if source and source_col and source_col in view_df.columns:
-        view_df = view_df[view_df[source_col].astype(str) == str(source)]
+        view_df[col] = view_df[col].map(_format_jobs_cell_value)
 
     if search and search.strip():
         q = search.strip().lower()
@@ -887,8 +1057,88 @@ def update_jobs_list(search: Optional[str], source: Optional[str], n_intervals: 
             mask = mask | view_df[col].astype(str).str.lower().str.contains(q, na=False)
         view_df = view_df[mask]
 
-    columns = [{"name": col, "id": col} for col in view_df.columns]
-    return source_options, view_df.head(1000).to_dict("records"), columns
+    for col in ["salary_min", "salary_max"]:
+        if col in view_df.columns:
+            view_df[col] = view_df[col].apply(_format_grouped_number)
+
+    header_map = {
+        "title": "Гарчиг",
+        "job_function": "Функц",
+        "job_industry": "Салбар",
+        "job_techpack_category": "Techpack",
+        "job_level": "Түвшин",
+        "experience_level": "Туршлага",
+        "education_level": "Боловсрол",
+        "salary_min": "Мин цалин",
+        "salary_max": "Макс цалин",
+        "company_name": "Компани",
+        "requirement_reasoning": "Requirement reasoning",
+        "requirements": "Requirements",
+        "benefits_reasoning": "Benefits reasoning",
+        "benefits": "Benefits",
+        "source_job": "Эх сурвалж",
+    }
+
+    columns = [{"name": header_map.get(col, col), "id": col} for col in view_df.columns]
+    count_text = f"Нийт мөр: {len(view_df):,}"
+    return (
+        source_options,
+        function_options,
+        industry_options,
+        level_options,
+        company_options,
+        count_text,
+        view_df.to_dict("records"),
+        columns,
+    )
+
+
+@callback(
+    Output("jobs-excel-download", "data"),
+    Input("download-jobs-excel", "n_clicks"),
+    State("jobs-table", "data"),
+    prevent_initial_call=True,
+)
+def download_jobs_excel(n_clicks: int, table_data: Optional[List[Dict[str, object]]]):
+    if not n_clicks or not table_data:
+        return dash.no_update
+
+    df = pd.DataFrame(table_data)
+    if df.empty:
+        return dash.no_update
+
+    for col in ["salary_min", "salary_max"]:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float)
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Jobs_List")
+        ws = writer.sheets["Jobs_List"]
+
+        header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        for col in ws.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                if cell.value is not None:
+                    max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 55)
+
+        for col_idx, cell in enumerate(ws[1], start=1):
+            if cell.value in {"salary_min", "salary_max"}:
+                for row in range(2, ws.max_row + 1):
+                    ws.cell(row=row, column=col_idx).number_format = "#,##0\"₮\""
+                    ws.cell(row=row, column=col_idx).alignment = Alignment(horizontal="right")
+
+    buffer.seek(0)
+    return dcc.send_bytes(buffer.read(), "jobs_list.xlsx")
 
 
 @callback(
