@@ -781,52 +781,60 @@ def _jobs_list_layout() -> html.Div:
             html.Div(
                 className="card",
                 children=[
-                    html.Div(
-                        className="section-header",
+                    dcc.Loading(
+                        id="jobs-list-loading",
+                        type="circle",
+                        color=COLORS["primary"],
+                        className="jobs-list-loading",
                         children=[
-                            html.Div(id="jobs-count", className="jobs-count", children="Нийт мөр: 0"),
-                            html.Button("Excel татах", id="download-jobs-excel", n_clicks=0, className="btn-primary"),
+                            html.Div(
+                                className="section-header",
+                                children=[
+                                    html.Div(id="jobs-count", className="jobs-count", children="Нийт мөр: 0"),
+                                    html.Button("Excel татах", id="download-jobs-excel", n_clicks=0, className="btn-primary"),
+                                ],
+                            ),
+                            dash_table.DataTable(
+                                id="jobs-table",
+                                page_action="none",
+                                sort_action="native",
+                                filter_action="none",
+                                style_table={"overflowX": "auto", "overflowY": "visible", "maxHeight": "none"},
+                                style_cell={
+                                    "textAlign": "left",
+                                    "padding": "8px",
+                                    "fontFamily": "Inter, Arial",
+                                    "maxWidth": "420px",
+                                    "whiteSpace": "pre-line",
+                                    "wordBreak": "break-word",
+                                    "height": "auto",
+                                },
+                                style_data_conditional=[
+                                    {
+                                        "if": {"column_id": "salary_min"},
+                                        "minWidth": "130px",
+                                        "width": "130px",
+                                        "maxWidth": "130px",
+                                        "whiteSpace": "nowrap",
+                                        "textAlign": "right",
+                                    },
+                                    {
+                                        "if": {"column_id": "salary_max"},
+                                        "minWidth": "130px",
+                                        "width": "130px",
+                                        "maxWidth": "130px",
+                                        "whiteSpace": "nowrap",
+                                        "textAlign": "right",
+                                    },
+                                ],
+                                style_header={
+                                    "backgroundColor": "#dbeafe",
+                                    "fontWeight": "bold",
+                                    "whiteSpace": "pre-line",
+                                    "wordBreak": "break-word",
+                                },
+                            ),
                         ],
-                    ),
-                    dash_table.DataTable(
-                        id="jobs-table",
-                        page_action="none",
-                        sort_action="native",
-                        filter_action="none",
-                        style_table={"overflowX": "auto", "overflowY": "visible", "maxHeight": "none"},
-                        style_cell={
-                            "textAlign": "left",
-                            "padding": "8px",
-                            "fontFamily": "Inter, Arial",
-                            "maxWidth": "420px",
-                            "whiteSpace": "pre-line",
-                            "wordBreak": "break-word",
-                            "height": "auto",
-                        },
-                        style_data_conditional=[
-                            {
-                                "if": {"column_id": "salary_min"},
-                                "minWidth": "130px",
-                                "width": "130px",
-                                "maxWidth": "130px",
-                                "whiteSpace": "nowrap",
-                                "textAlign": "right",
-                            },
-                            {
-                                "if": {"column_id": "salary_max"},
-                                "minWidth": "130px",
-                                "width": "130px",
-                                "maxWidth": "130px",
-                                "whiteSpace": "nowrap",
-                                "textAlign": "right",
-                            },
-                        ],
-                        style_header={
-                            "backgroundColor": "#dbeafe",
-                            "fontWeight": "bold",
-                            "whiteSpace": "pre-line",
-                            "wordBreak": "break-word",
-                        },
                     )
                 ],
             ),

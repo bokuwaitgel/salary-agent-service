@@ -296,6 +296,14 @@ body {
   font-weight: 700;
 }
 
+.jobs-list-loading {
+  min-height: 220px;
+}
+
+.jobs-list-loading .dash-spinner {
+  margin-top: 36px;
+}
+
 /* Jobs table professional UI/UX improvements */
 #jobs-table {
   border-radius: 10px;
