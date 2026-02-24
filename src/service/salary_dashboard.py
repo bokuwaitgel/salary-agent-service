@@ -485,49 +485,23 @@ def _render_chat_messages(history: List[Dict[str, object]]) -> List[html.Div]:
         )
     return bubbles
 
-
-def _chatbot_answer(message: str) -> str:
-    text = message.lower().strip()
-    df = _exclude_all_titles(_load_data_main())
-
-    if df.empty:
-        return "Одоогоор өгөгдөл алга байна."
-
-    if "дундаж" in text and "цалин" in text and "хамгийн" not in text:
-        avg_salary = df["average_salary"].mean() if "average_salary" in df.columns else None
-        return f"Одоогийн нийт дундаж цалин: {_format_mnt(avg_salary)}"
-
-    if "хамгийн" in text and ("өндөр" in text or "их" in text):
-        latest = _latest_per_title(df)
-        if latest.empty or "average_salary" not in latest.columns:
-            return "Хамгийн өндөр цалингийн мэдээлэл олдсонгүй."
-        row = latest.sort_values("average_salary", ascending=False).iloc[0]
-        return f"Хамгийн өндөр дундаж цалинтай ангилал: {row.get('title', 'N/A')} — {_format_mnt(row.get('average_salary'))}"
-
-    if "хандлага" in text or "trend" in text or "сар" in text:
-        if "period" not in df.columns or not df["period"].notna().any():
-            return "Сарын хандлагын өгөгдөл хүрэлцэхгүй байна."
-        trend = df.groupby("period", as_index=False)["average_salary"].mean()
-        if len(trend) < 2:
-            return "Хандлага тооцоолох өгөгдөл бага байна."
-        prev_v = float(trend.iloc[-2]["average_salary"])
-        last_v = float(trend.iloc[-1]["average_salary"])
-        direction = "өссөн" if last_v >= prev_v else "буурсан"
-        return f"Сүүлийн сард дундаж цалин {direction}: {_format_mnt(prev_v)} → {_format_mnt(last_v)}"
-
-    return "Асуултаа 'дундаж цалин', 'хамгийн өндөр', эсвэл 'сарын хандлага' гэж тодруулж асуугаарай."
-
-
 def _extract_chat_text(payload: object) -> Optional[str]:
     if isinstance(payload, str):
         return payload.strip() or None
 
     if isinstance(payload, dict):
-        for key in ["response", "answer", "message", "output", "result", "text"]:
+        for key in ["response", "answer", "message", "output", "result", "text", "content", "reply"]:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
             if isinstance(value, (dict, list)):
+                nested = _extract_chat_text(value)
+                if nested:
+                    return nested
+
+        # Fallback: scan all values for nested payload styles (e.g., {"data": {...}})
+        for value in payload.values():
+            if isinstance(value, (dict, list, str)):
                 nested = _extract_chat_text(value)
                 if nested:
                     return nested
@@ -548,7 +522,13 @@ def _ask_main_api(message: str) -> Optional[str]:
         endpoints.append(
             (
                 N8N_AGENT_URL,
-                {"session_id": "dashboard-session", "message": message},
+                {
+                    "session_id": "dashboard-session",
+                    "message": message,
+                    # Common n8n webhook field names for compatibility
+                    "chatInput": message,
+                    "query": message,
+                },
                 (5, 60),
             )
         )
@@ -609,7 +589,7 @@ def _dashboard_page_layout() -> html.Div:
             dcc.Download(id="excel-download"),
             dcc.Store(
                 id="chat-store",
-                data=[{"role": "assistant", "content": "Сайн байна уу 👋 Цалингийн мэдээллээр туслая. 'дундаж цалин' гэж асуугаарай."}],
+                data=[{"role": "assistant", "content": "Сайн байна уу 👋 Цалингийн мэдээллээр туслая."}],
             ),
             dcc.Store(id="chat-request"),
             dcc.Store(id="chat-open", data=False),
@@ -867,12 +847,7 @@ app.layout = html.Div(
     children=[
         dcc.Location(id="url"),
         _navbar(),
-        dcc.Loading(
-            id="route-loading",
-            type="circle",
-            color=COLORS["primary"],
-            children=html.Main(id="page-content", className="page-container"),
-        ),
+        html.Main(id="page-content", className="page-container"),
     ],
 )
 
@@ -911,6 +886,8 @@ def set_chat_visibility(is_open: Optional[bool]):
     Output("chat-output", "children"),
     Output("chat-input", "value"),
     Output("chat-request", "data"),
+    Output("chat-send", "disabled"),
+    Output("chat-input", "disabled"),
     Input("chat-send", "n_clicks"),
     Input("chat-input", "n_submit"),
     State("chat-input", "value"),
@@ -919,8 +896,13 @@ def set_chat_visibility(is_open: Optional[bool]):
 )
 def chat_respond(n_clicks: int, n_submit: Optional[int], message: Optional[str], history: Optional[List[Dict[str, object]]]):
     history = history or []
+    has_pending = any(bool(item.get("pending")) for item in history)
+
+    if has_pending:
+        return history, _render_chat_messages(history), message or "", None, True, True
+
     if not message or not message.strip():
-        return history, _render_chat_messages(history), "", None
+        return history, _render_chat_messages(history), "", None, False, False
 
     user_message = message.strip()
     updated = history + [
@@ -928,12 +910,14 @@ def chat_respond(n_clicks: int, n_submit: Optional[int], message: Optional[str],
         {"role": "assistant", "content": "...", "pending": True},
     ]
     request_payload = {"id": uuid.uuid4().hex, "message": user_message}
-    return updated, _render_chat_messages(updated), "", request_payload
+    return updated, _render_chat_messages(updated), "", request_payload, True, True
 
 
 @callback(
     Output("chat-store", "data", allow_duplicate=True),
     Output("chat-output", "children", allow_duplicate=True),
+    Output("chat-send", "disabled", allow_duplicate=True),
+    Output("chat-input", "disabled", allow_duplicate=True),
     Input("chat-request", "data"),
     State("chat-store", "data"),
     prevent_initial_call=True,
@@ -941,24 +925,25 @@ def chat_respond(n_clicks: int, n_submit: Optional[int], message: Optional[str],
 def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: Optional[List[Dict[str, object]]]):
     history = history or []
     if not request_payload or not request_payload.get("message"):
-        return history, _render_chat_messages(history)
+        return history, _render_chat_messages(history), False, False
 
-    answer = _ask_main_api(request_payload["message"]) or _chatbot_answer(request_payload["message"])
+    answer = _ask_main_api(request_payload["message"])
+    message = answer if answer else "Уучлаарай, одоогоор хариу авах боломжгүй байна."
 
     updated: List[Dict[str, object]] = []
     replaced = False
     for item in history:
         if bool(item.get("pending")) and not replaced:
-            updated.append({"role": "assistant", "content": answer})
+            updated.append({"role": "assistant", "content": message})
             replaced = True
             continue
         clean_item = {k: v for k, v in item.items() if k != "pending"}
         updated.append(clean_item)
 
     if not replaced:
-        updated.append({"role": "assistant", "content": answer})
+        updated.append({"role": "assistant", "content": message})
 
-    return updated, _render_chat_messages(updated)
+    return updated, _render_chat_messages(updated), False, False
 
 
 @callback(
