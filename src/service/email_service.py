@@ -2,49 +2,24 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+import smtplib
+from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email import encoders
 from io import BytesIO
 from typing import List, Optional
 
-import smtplib
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import create_engine
 
 from src.dependencies import get_classifier_output_repository
-from schemas.base_classifier import JobClassificationOutput, JobRequirement, JobBenefit
+from schemas.base_classifier import JobBenefit, JobRequirement
 
 load_dotenv()
-
-app = FastAPI(title="Salary Agent Email API", version="1.0.0")
-
-
-class EmailRequest(BaseModel):
-    to_email: str = Field(..., description="Recipient email address")
-    subject: Optional[str] = Field(None, description="Email subject")
-
-class SalaryReportRequest(BaseModel):
-    to_email: str = Field(..., description="Recipient email address")
-    subject: Optional[str] = Field(None, description="Email subject")
-    type: Optional[str] = Field("function", description="Type filter: function, job_level, industry, or techpack_category")
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., description="User chat message")
-
-
-class ChatResponse(BaseModel):
-    response: str
 
 
 def _format_requirements(requirements: List[object]) -> str:
@@ -110,12 +85,13 @@ def _coerce_list(value: object) -> List[object]:
         return [value]
     return [value]
 
+
 def _build_excel() -> bytes:
     classifications = get_classifier_output_repository().get_all()
 
     workbook = Workbook()
     sheet: Worksheet = workbook.active  # type: ignore
-    sheet.title = "Job Classifications" 
+    sheet.title = "Job Classifications"
 
     headers = [
         "Title",
@@ -146,12 +122,9 @@ def _build_excel() -> bytes:
     body_alignment = Alignment(vertical="top", wrap_text=True)
 
     for item in classifications:
-        # Handle requirements formatting
         formatted_requirements = _format_requirements(_coerce_list(item.requirements))
-        
-        # Handle benefits formatting
         formatted_benefits = _format_benefits(_coerce_list(item.benefits))
-        
+
         sheet.append(
             [
                 item.title,
@@ -198,30 +171,25 @@ def _build_excel() -> bytes:
 
 
 def _build_salary_excel(type_filter: str = "function", title_filter: Optional[str] = None) -> bytes:
-    """Build Excel report for salary calculation data."""
     engine = create_engine(
         os.getenv("DATABASE_URI", "sqlite:///products.db"),
         pool_pre_ping=True,
     )
     query = "SELECT * FROM salary_calculation_output ORDER BY created_at DESC"
     df = pd.read_sql(query, engine)
-    
-    # Apply filters
+
     if "type" in df.columns:
         df = df[df["type"] == type_filter]
-    
+
     if title_filter and "title" in df.columns:
         df = df[df["title"] == title_filter]
-    
-    # Exclude "All" titles
+
     if "title" in df.columns:
         df = df[~df["title"].astype(str).str.startswith("All ")]
-    
-    # Get latest per title
+
     if "created_at" in df.columns and df["created_at"].notna().any():
         df = df.sort_values("created_at").drop_duplicates(subset=["title"], keep="last")
-    
-    # Prepare display columns
+
     display_df = df.rename(
         columns={
             "title": "Ажлын ангилал",
@@ -233,7 +201,7 @@ def _build_salary_excel(type_filter: str = "function", title_filter: Optional[st
             "lambda_count": "Lambda",
         }
     )
-    
+
     columns_to_export = [
         "Ажлын ангилал",
         "Доод цалин",
@@ -244,22 +212,19 @@ def _build_salary_excel(type_filter: str = "function", title_filter: Optional[st
         "Lambda",
     ]
     display_df = display_df[[col for col in columns_to_export if col in display_df.columns]]
-    
-    # Create Excel file
+
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         display_df.to_excel(writer, index=False, sheet_name="Salary_Report")
         ws = writer.sheets["Salary_Report"]
-        
-        # Style header
+
         header_fill = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
         header_font = Font(color="FFFFFF", bold=True)
         for cell in ws[1]:
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
-        
-        # Auto-adjust column widths
+
         for col in ws.columns:
             max_len = 0
             col_letter = col[0].column_letter
@@ -267,8 +232,7 @@ def _build_salary_excel(type_filter: str = "function", title_filter: Optional[st
                 if cell.value is not None:
                     max_len = max(max_len, len(str(cell.value)))
             ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
-        
-        # Format money columns
+
         money_cols = {"Доод цалин", "Дээд цалин", "Дундаж цалин"}
         for col_idx, cell in enumerate(ws[1], start=1):
             if cell.value in money_cols:
@@ -278,170 +242,26 @@ def _build_salary_excel(type_filter: str = "function", title_filter: Optional[st
             if cell.value in {"Зарын тоо", "Zangia", "Lambda"}:
                 for row in range(2, ws.max_row + 1):
                     ws.cell(row=row, column=col_idx).alignment = Alignment(horizontal="center")
-    
+
     buffer.seek(0)
     return buffer.read()
-
-
-def _format_mnt(value: Optional[float]) -> str:
-    if value is None or pd.isna(value):
-        return "N/A"
-    return f"{value:,.0f} ₮"
-
-
-def _build_chat_answer(message: str) -> str:
-    text = (message or "").strip().lower()
-
-    engine = create_engine(
-        os.getenv("DATABASE_URI", "sqlite:///products.db"),
-        pool_pre_ping=True,
-    )
-    df = pd.read_sql("SELECT * FROM salary_calculation_output ORDER BY created_at DESC", engine)
-
-    if df.empty:
-        return "Одоогоор өгөгдөл алга байна."
-
-    if "title" in df.columns:
-        df = df[~df["title"].astype(str).str.startswith("All ")]
-
-    if "created_at" in df.columns:
-        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
-
-    for col in ["average_salary", "min_salary", "max_salary", "year", "month"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if "дундаж" in text and "цалин" in text and "хамгийн" not in text:
-        return f"Одоогийн нийт дундаж цалин: {_format_mnt(df['average_salary'].mean() if 'average_salary' in df.columns else None)}"
-
-    if "хамгийн" in text and ("өндөр" in text or "их" in text):
-        latest = df
-        if "created_at" in latest.columns and latest["created_at"].notna().any() and "title" in latest.columns:
-            latest = latest.sort_values("created_at").drop_duplicates(subset=["title"], keep="last")
-        if latest.empty or "average_salary" not in latest.columns:
-            return "Хамгийн өндөр цалингийн мэдээлэл олдсонгүй."
-        row = latest.sort_values("average_salary", ascending=False).iloc[0]
-        return f"Хамгийн өндөр дундаж цалинтай ангилал: {row.get('title', 'N/A')} — {_format_mnt(row.get('average_salary'))}"
-
-    if "хандлага" in text or "trend" in text or "сар" in text:
-        if "year" in df.columns and "month" in df.columns and "average_salary" in df.columns:
-            trend_df = df.dropna(subset=["year", "month"]).copy()
-            if trend_df.empty:
-                return "Сарын хандлагын өгөгдөл хүрэлцэхгүй байна."
-            trend_df["period"] = trend_df.apply(lambda x: f"{int(x['year'])}-{int(x['month']):02d}", axis=1)
-            trend = trend_df.groupby("period", as_index=False)["average_salary"].mean()
-            if len(trend) < 2:
-                return "Хандлага тооцоолох өгөгдөл бага байна."
-            prev_v = float(trend.iloc[-2]["average_salary"])
-            last_v = float(trend.iloc[-1]["average_salary"])
-            direction = "өссөн" if last_v >= prev_v else "буурсан"
-            return f"Сүүлийн сард дундаж цалин {direction}: {_format_mnt(prev_v)} → {_format_mnt(last_v)}"
-        return "Сарын хандлагын өгөгдөл хүрэлцэхгүй байна."
-
-    return "Асуултаа 'дундаж цалин', 'хамгийн өндөр', эсвэл 'сарын хандлага' гэж тодруулж асуугаарай."
 
 
 def _send_email(to_email: str, subject: str, attachment: bytes, filename: str) -> None:
     sender_email = os.getenv("SENDER_EMAIL", "itgel6708@gmail.com")
     app_password = os.getenv("GMAIL_APP_PASSWORD", "")
 
-    # Allow overriding recipients via env vars, but keep current defaults.
-    receiver_emails = [to_email]
-    # cc_emails = _parse_email_list(os.getenv("CC_EMAILS") or os.getenv("CC_EMAIL"), fallback=[])
-     # Root container must be 'mixed' when there are attachments.
     msg = MIMEMultipart("mixed")
     msg["From"] = sender_email
-    msg["To"] = ", ".join(receiver_emails)
+    msg["To"] = to_email
     msg["Subject"] = subject
 
-    # Attach the Excel file.
     part = MIMEBase("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    part.set_payload(attachment)    
+    part.set_payload(attachment)
     encoders.encode_base64(part)
     part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
     msg.attach(part)
-    # Send the email via SMTP server.
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender_email, app_password)
         server.send_message(msg)
-
-    
-
-
-@app.get("/health")
-async def health_check() -> dict:
-    return {"status": "ok"}
-
-
-@app.post("/email/job-classifications")
-async def email_job_classifications(request: EmailRequest) -> dict:
-
-
-    subject = request.subject or "Job Classification Results"
-
-    try:
-        attachment = _build_excel()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"job_classifications_{timestamp}.xlsx"
-        _send_email(request.to_email, subject, attachment, filename)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    return {"status": "sent", "to": request.to_email, "filename": filename}
-
-@app.post("/download/salary-report")
-async def download_salary_report_post(request: SalaryReportRequest):
-    """Download salary report as Excel file (POST version).
-    
-    Args:
-        request: Request with type and optional title filter
-    
-    Returns:
-        Excel file with salary report data
-    """
-    try:
-        excel_bytes = _build_salary_excel(type_filter=request.type or "function")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"salary_report_{timestamp}.xlsx"
-        
-        return StreamingResponse(
-            BytesIO(excel_bytes),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.post("/email/salary-report")
-async def email_salary_report(request: SalaryReportRequest) -> dict:
-    """Generate salary report and send it via email.
-    
-    Args:
-        request: Request with recipient email, subject, type, and optional title filter
-    Returns:
-        Status of email sending
-    """
-
-    subject = request.subject or "Salary Report"
-
-    
-
-    try:
-        excel_bytes = _build_salary_excel(type_filter=request.type or "function")
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"salary_report_{timestamp}.xlsx"
-        _send_email(request.to_email, subject, excel_bytes, filename)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    return {"status": "sent", "to": request.to_email, "filename": filename}
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    try:
-        answer = _build_chat_answer(request.message)
-        return ChatResponse(response=answer)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc

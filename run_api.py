@@ -18,7 +18,7 @@ def main() -> None:
 	log_level = os.getenv("API_LOG_LEVEL", "info")
 	proxy_headers = os.getenv("API_PROXY_HEADERS", "true").lower() in {"true", "1", "yes"}
 	uvicorn.run(
-		"src.api.email_app:app",
+		"src.api.api:app",
 		host=host,
 		port=port,
 		reload=False,
