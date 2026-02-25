@@ -275,9 +275,34 @@ body {
 
 .jobs-filter-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 8px;
   align-items: end;
+}
+
+.jobs-filter-section-title {
+  margin: 2px 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.jobs-search-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.jobs-local-filter-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.3fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.jobs-local-filter-row > * {
+  min-width: 0;
 }
 
 .jobs-search-input {
@@ -571,8 +596,12 @@ body {
 }
 
 @media (max-width: 1100px) {
-  .kpi-grid {
-    grid-template-columns: repeat(2, minmax(190px, 1fr));
+  .jobs-filter-grid {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+
+  .jobs-local-filter-row {
+    grid-template-columns: 1fr;
   }
 
   .chart-grid,

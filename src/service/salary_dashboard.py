@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ASSETS_DIR = PROJECT_ROOT / "assets"
 N8N_AGENT_URL = os.getenv("N8N_AGENT_URL", "").strip()
 DASHBOARD_API_URL = os.getenv("DASHBOARD_API_URL", "http://127.0.0.1:8007").rstrip("/")
+JOBS_LIST_LIMIT = int(os.getenv("JOBS_LIST_LIMIT", "500"))
 
 COLORS = {
     "bg": "#f8fafc",
@@ -51,6 +52,9 @@ _MAIN_DATA_CACHE: Optional[pd.DataFrame] = None
 _MAIN_DATA_CACHE_TS: float = 0.0
 _JOBS_DATA_CACHE: Optional[pd.DataFrame] = None
 _JOBS_DATA_CACHE_TS: float = 0.0
+_JOBS_DATA_CACHE_KEY: tuple[object, ...] | None = None
+_JOBS_FILTER_OPTIONS_CACHE: Optional[Dict[str, List[Dict[str, str]]]] = None
+_JOBS_FILTER_OPTIONS_CACHE_TS: float = 0.0
 
 
 class ExperienceBreakdownItem(TypedDict):
@@ -102,14 +106,40 @@ def _load_data_main() -> pd.DataFrame:
     return df.copy()
 
 
-def _load_jobs_raw(limit: int = 10000) -> pd.DataFrame:
-    global _JOBS_DATA_CACHE, _JOBS_DATA_CACHE_TS
+def _load_jobs_raw(
+    limit: int = 10000,
+    search: Optional[str] = None,
+    source: Optional[str] = None,
+    selected_function: Optional[str] = None,
+    selected_industry: Optional[str] = None,
+    selected_level: Optional[str] = None,
+    selected_company: Optional[str] = None,
+) -> pd.DataFrame:
+    global _JOBS_DATA_CACHE, _JOBS_DATA_CACHE_TS, _JOBS_DATA_CACHE_KEY
 
     now = time.time()
-    if _JOBS_DATA_CACHE is not None and (now - _JOBS_DATA_CACHE_TS) < 45:
+    cache_key = (
+        int(limit),
+        (search or "").strip().lower(),
+        source or "",
+        selected_function or "",
+        selected_industry or "",
+        selected_level or "",
+        selected_company or "",
+    )
+    if _JOBS_DATA_CACHE is not None and _JOBS_DATA_CACHE_KEY == cache_key and (now - _JOBS_DATA_CACHE_TS) < 45:
         return _JOBS_DATA_CACHE.head(limit).copy()
 
-    api_payload = _post_api_json("dashboard/jobs-data", payload={"limit": int(limit)})
+    payload: Dict[str, object] = {
+        "limit": int(limit),
+        "search": (search or "").strip() or None,
+        "source": source,
+        "selected_function": selected_function,
+        "selected_industry": selected_industry,
+        "selected_level": selected_level,
+        "selected_company": selected_company,
+    }
+    api_payload = _post_api_json("dashboard/jobs-data", payload=payload)
     if api_payload and isinstance(api_payload.get("items"), list):
         df = pd.DataFrame(cast(List[Dict[str, object]], api_payload["items"]))
     else:
@@ -120,7 +150,37 @@ def _load_jobs_raw(limit: int = 10000) -> pd.DataFrame:
 
     _JOBS_DATA_CACHE = df
     _JOBS_DATA_CACHE_TS = now
+    _JOBS_DATA_CACHE_KEY = cache_key
     return df.copy()
+
+
+def _load_jobs_filter_options(refresh: bool = False) -> Dict[str, List[Dict[str, str]]]:
+    global _JOBS_FILTER_OPTIONS_CACHE, _JOBS_FILTER_OPTIONS_CACHE_TS
+
+    now = time.time()
+    if not refresh and _JOBS_FILTER_OPTIONS_CACHE is not None and (now - _JOBS_FILTER_OPTIONS_CACHE_TS) < 300:
+        return dict(_JOBS_FILTER_OPTIONS_CACHE)
+
+    api_payload = _post_api_json("dashboard/jobs-filter-options", payload={"refresh": bool(refresh)})
+    if not api_payload:
+        return {
+            "source_options": [],
+            "function_options": [],
+            "industry_options": [],
+            "level_options": [],
+            "company_options": [],
+        }
+
+    result = {
+        "source_options": cast(List[Dict[str, str]], api_payload.get("source_options", [])),
+        "function_options": cast(List[Dict[str, str]], api_payload.get("function_options", [])),
+        "industry_options": cast(List[Dict[str, str]], api_payload.get("industry_options", [])),
+        "level_options": cast(List[Dict[str, str]], api_payload.get("level_options", [])),
+        "company_options": cast(List[Dict[str, str]], api_payload.get("company_options", [])),
+    }
+    _JOBS_FILTER_OPTIONS_CACHE = result
+    _JOBS_FILTER_OPTIONS_CACHE_TS = now
+    return dict(result)
 
 
 def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
@@ -438,6 +498,7 @@ def _apply_chart_style(fig: go.Figure):
     fig.update_layout(
         paper_bgcolor="white",
         plot_bgcolor="white",
+        autosize=True,
         font={"family": "Inter, Segoe UI, Arial, sans-serif", "color": COLORS["text"]},
         transition={"duration": 300, "easing": "cubic-in-out"},
     )
@@ -617,12 +678,12 @@ def _dashboard_page_layout() -> html.Div:
                 children=html.Div(
                     className="chart-grid",
                     children=[
-                        html.Div(className="card", children=[dcc.Graph(id="salary-bar")]),
-                        html.Div(className="card", children=[dcc.Graph(id="salary-range")]),
-                        html.Div(className="card", children=[dcc.Graph(id="count-bar")]),
-                        html.Div(className="card", children=[dcc.Graph(id="trend-line")]),
-                        html.Div(className="card", children=[dcc.Graph(id="source-pie")]),
-                        html.Div(className="card", children=[dcc.Graph(id="compare-chart")]),
+                        html.Div(className="card", children=[dcc.Graph(id="salary-bar", responsive=True, style={"height": "100%"})]),
+                        html.Div(className="card", children=[dcc.Graph(id="salary-range", responsive=True, style={"height": "100%"})]),
+                        html.Div(className="card", children=[dcc.Graph(id="count-bar", responsive=True, style={"height": "100%"})]),
+                        html.Div(className="card", children=[dcc.Graph(id="trend-line", responsive=True, style={"height": "100%"})]),
+                        html.Div(className="card", children=[dcc.Graph(id="source-pie", responsive=True, style={"height": "100%"})]),
+                        html.Div(className="card", children=[dcc.Graph(id="compare-chart", responsive=True, style={"height": "100%"})]),
                     ],
                 ),
             ),
@@ -736,28 +797,33 @@ def _jobs_list_layout() -> html.Div:
             ),
             dcc.Interval(id="jobs-interval", interval=120000, n_intervals=0),
             dcc.Download(id="jobs-excel-download"),
+            dcc.Store(id="jobs-table-raw", data=[]),
             html.Div(
                 className="card jobs-filter-card",
                 children=[
+                    html.Div("Өгөгдлийн сангаас хайлт ба шүүлтүүр", className="jobs-filter-section-title"),
                     html.Div(
                         className="jobs-filter-grid",
                         children=[
-                            html.Div(
-                                children=[
-                                    html.Label("Хайлт", className="field-label"),
-                                    dcc.Input(
-                                        id="jobs-search",
-                                        type="text",
-                                        placeholder="Гарчиг, компани, requirement...",
-                                        className="jobs-search-input",
-                                    ),
-                                ]
-                            ),
                             html.Div(children=[html.Label("Эх сурвалж", className="field-label"), dcc.Dropdown(id="jobs-source", options=[], placeholder="Бүгд", clearable=True)]),
                             html.Div(children=[html.Label("Функц", className="field-label"), dcc.Dropdown(id="jobs-function", options=[], placeholder="Бүгд", clearable=True)]),
                             html.Div(children=[html.Label("Салбар", className="field-label"), dcc.Dropdown(id="jobs-industry", options=[], placeholder="Бүгд", clearable=True)]),
                             html.Div(children=[html.Label("Түвшин", className="field-label"), dcc.Dropdown(id="jobs-level", options=[], placeholder="Бүгд", clearable=True)]),
                             html.Div(children=[html.Label("Компани", className="field-label"), dcc.Dropdown(id="jobs-company", options=[], placeholder="Бүгд", clearable=True)]),
+                        ],
+                    ),
+                    html.Div(
+                        className="jobs-search-row",
+                        children=[
+                            dcc.Input(
+                                id="jobs-api-search",
+                                type="text",
+                                placeholder="Гарчиг, компани, requirement...",
+                                className="jobs-search-input",
+                                debounce=False,
+                                style={"flex": "1"},
+                            ),
+                            html.Button("Хайх", id="jobs-api-search-btn", n_clicks=0, className="btn-primary"),
                         ],
                     ),
                 ],
@@ -770,6 +836,8 @@ def _jobs_list_layout() -> html.Div:
                         type="circle",
                         color=COLORS["primary"],
                         className="jobs-list-loading",
+                        delay_show=300,
+                        delay_hide=120,
                         children=[
                             html.Div(
                                 className="section-header",
@@ -778,11 +846,47 @@ def _jobs_list_layout() -> html.Div:
                                     html.Button("Excel татах", id="download-jobs-excel", n_clicks=0, className="btn-primary"),
                                 ],
                             ),
+                            html.Div(
+                                className="detail-filter-row",
+                                children=[
+                                    html.Div("Хүснэгтийн дотоод шүүлтүүр (одоогийн үр дүн)", className="jobs-filter-section-title"),
+                                ],
+                            ),
+                            html.Div(
+                                className="jobs-local-filter-row",
+                                children=[
+                                    dcc.Dropdown(
+                                        id="jobs-local-source-filter",
+                                        options=[],
+                                        value=[],
+                                        multi=True,
+                                        placeholder="Хүснэгт дотор: Эх сурвалж",
+                                        className="detail-title-filter",
+                                    ),
+                                    dcc.Dropdown(
+                                        id="jobs-local-level-filter",
+                                        options=[],
+                                        value=[],
+                                        multi=True,
+                                        placeholder="Хүснэгт дотор: Түвшин",
+                                        className="detail-title-filter",
+                                    ),
+                                    dcc.Input(
+                                        id="jobs-local-search",
+                                        type="text",
+                                        value="",
+                                        debounce=True,
+                                        placeholder="Хүснэгт дотор хайх (одоогийн үр дүнгээс)...",
+                                        className="detail-search-input",
+                                    ),
+                                ],
+                            ),
                             dash_table.DataTable(
                                 id="jobs-table",
-                                page_action="none",
+                                page_action="native",
+                                page_size=25,
                                 sort_action="native",
-                                filter_action="none",
+                                filter_action="native",
                                 style_table={"overflowX": "auto", "overflowY": "visible", "maxHeight": "none"},
                                 style_cell={
                                     "textAlign": "left",
@@ -831,6 +935,7 @@ app = dash.Dash(
     title="Salary Analysis Agent",
     suppress_callback_exceptions=True,
     assets_folder=str(ASSETS_DIR),
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
 )
 server = app.server
 
@@ -947,26 +1052,49 @@ def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: Opti
     Output("jobs-count", "children"),
     Output("jobs-table", "data"),
     Output("jobs-table", "columns"),
-    Input("jobs-search", "value"),
-    Input("jobs-source", "value"),
-    Input("jobs-function", "value"),
-    Input("jobs-industry", "value"),
-    Input("jobs-level", "value"),
-    Input("jobs-company", "value"),
+    Output("jobs-table-raw", "data"),
+    Input("jobs-api-search-btn", "n_clicks"),
     Input("jobs-interval", "n_intervals"),
+    State("jobs-api-search", "value"),
+    State("jobs-source", "value"),
+    State("jobs-function", "value"),
+    State("jobs-industry", "value"),
+    State("jobs-level", "value"),
+    State("jobs-company", "value"),
 )
 def update_jobs_list(
-    search: Optional[str],
+    n_clicks: int,
+    n_intervals: int,
+    api_search_text: Optional[str],
     source: Optional[str],
     selected_function: Optional[str],
     selected_industry: Optional[str],
     selected_level: Optional[str],
     selected_company: Optional[str],
-    n_intervals: int,
 ):
-    df = _load_jobs_raw(limit=10000)
+    filter_options = _load_jobs_filter_options(refresh=(n_intervals == 0))
+
+    df = _load_jobs_raw(
+        limit=JOBS_LIST_LIMIT,
+        search=(api_search_text or "").strip(),
+        source=source,
+        selected_function=selected_function,
+        selected_industry=selected_industry,
+        selected_level=selected_level,
+        selected_company=selected_company,
+    )
     if df.empty:
-        return [], [], [], [], [], "Нийт мөр: 0", [], []
+        return (
+            filter_options.get("source_options", []),
+            filter_options.get("function_options", []),
+            filter_options.get("industry_options", []),
+            filter_options.get("level_options", []),
+            filter_options.get("company_options", []),
+            "Нийт мөр: 0",
+            [],
+            [],
+            [],
+        )
 
     source_col = _first_existing_col(df, ["source_job", "source", "platform", "site_name", "website"])
     function_col = _first_existing_col(df, ["job_function"])
@@ -997,42 +1125,16 @@ def update_jobs_list(
         ordered_cols = df.columns.tolist()
     view_df = df[ordered_cols].copy()
 
-    def _option_list(frame: pd.DataFrame, col: Optional[str]) -> List[Dict[str, str]]:
-        if not col or col not in frame.columns:
-            return []
-        return [
-            {"label": str(v), "value": str(v)}
-            for v in sorted(frame[col].dropna().astype(str).unique().tolist())
-            if str(v).strip()
-        ]
-
-    source_options = _option_list(view_df, source_col)
-    function_options = _option_list(view_df, function_col)
-    industry_options = _option_list(view_df, industry_col)
-    level_options = _option_list(view_df, level_col)
-    company_options = _option_list(view_df, company_col)
-
-    def _eq_filter(frame: pd.DataFrame, col: Optional[str], value: Optional[str]) -> pd.DataFrame:
-        if not value or not col or col not in frame.columns:
-            return frame
-        return frame[frame[col].astype(str) == str(value)]
-
-    view_df = _eq_filter(view_df, source_col, source)
-    view_df = _eq_filter(view_df, function_col, selected_function)
-    view_df = _eq_filter(view_df, industry_col, selected_industry)
-    view_df = _eq_filter(view_df, level_col, selected_level)
-    view_df = _eq_filter(view_df, company_col, selected_company)
+    source_options = filter_options.get("source_options", [])
+    function_options = filter_options.get("function_options", [])
+    industry_options = filter_options.get("industry_options", [])
+    level_options = filter_options.get("level_options", [])
+    company_options = filter_options.get("company_options", [])
 
     # Convert values for table rendering (human-readable).
-    for col in view_df.columns:
+    object_columns = view_df.select_dtypes(include=["object"]).columns.tolist()
+    for col in object_columns:
         view_df[col] = view_df[col].map(_format_jobs_cell_value)
-
-    if search and search.strip():
-        q = search.strip().lower()
-        mask = pd.Series([False] * len(view_df), index=view_df.index)
-        for col in view_df.columns:
-            mask = mask | view_df[col].astype(str).str.lower().str.contains(q, na=False)
-        view_df = view_df[mask]
 
     for col in ["salary_min", "salary_max"]:
         if col in view_df.columns:
@@ -1067,7 +1169,84 @@ def update_jobs_list(
         count_text,
         view_df.to_dict("records"),
         columns,
+        view_df.to_dict("records"),
     )
+
+
+@callback(
+    Output("jobs-local-source-filter", "options"),
+    Output("jobs-local-level-filter", "options"),
+    Input("jobs-table-raw", "data"),
+)
+def update_jobs_local_filter_options(raw_rows: Optional[List[Dict[str, object]]]):
+    rows = raw_rows or []
+    if not rows:
+        return [], []
+
+    def _pick_key(candidates: List[str]) -> Optional[str]:
+        keys = set()
+        for row in rows:
+            keys.update(row.keys())
+        for key in candidates:
+            if key in keys:
+                return key
+        return None
+
+    source_key = _pick_key(["source_job", "source", "platform", "site_name", "website"])
+    level_key = _pick_key(["job_level", "Түвшин"])
+
+    def _options_for(key: Optional[str]) -> List[Dict[str, str]]:
+        if not key:
+            return []
+        values = sorted({str(row.get(key, "")).strip() for row in rows if str(row.get(key, "")).strip()})
+        return [{"label": v, "value": v} for v in values]
+
+    return _options_for(source_key), _options_for(level_key)
+
+
+@callback(
+    Output("jobs-table", "data", allow_duplicate=True),
+    Output("jobs-count", "children", allow_duplicate=True),
+    Input("jobs-local-search", "value"),
+    Input("jobs-local-source-filter", "value"),
+    Input("jobs-local-level-filter", "value"),
+    Input("jobs-table-raw", "data"),
+    prevent_initial_call=True,
+)
+def filter_jobs_table_local(
+    local_search: Optional[str],
+    local_source_values: Optional[List[str]],
+    local_level_values: Optional[List[str]],
+    raw_rows: Optional[List[Dict[str, object]]],
+):
+    rows = raw_rows or []
+
+    def _pick_key(candidates: List[str]) -> Optional[str]:
+        keys = set()
+        for row in rows:
+            keys.update(row.keys())
+        for key in candidates:
+            if key in keys:
+                return key
+        return None
+
+    source_key = _pick_key(["source_job", "source", "platform", "site_name", "website"])
+    level_key = _pick_key(["job_level", "Түвшин"])
+
+    if local_source_values and source_key:
+        selected = {str(v) for v in local_source_values if str(v).strip()}
+        rows = [row for row in rows if str(row.get(source_key, "")).strip() in selected]
+
+    if local_level_values and level_key:
+        selected = {str(v) for v in local_level_values if str(v).strip()}
+        rows = [row for row in rows if str(row.get(level_key, "")).strip() in selected]
+
+    if not local_search or not local_search.strip():
+        return rows, f"Нийт мөр: {len(rows):,}"
+
+    q = local_search.strip().lower()
+    filtered = [row for row in rows if q in " ".join(str(v) for v in row.values()).lower()]
+    return filtered, f"Нийт мөр: {len(filtered):,}"
 
 
 @callback(
