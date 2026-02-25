@@ -678,12 +678,12 @@ def _dashboard_page_layout() -> html.Div:
                 children=html.Div(
                     className="chart-grid",
                     children=[
-                        html.Div(className="card", children=[dcc.Graph(id="salary-bar", responsive=True, style={"height": "100%"})]),
-                        html.Div(className="card", children=[dcc.Graph(id="salary-range", responsive=True, style={"height": "100%"})]),
-                        html.Div(className="card", children=[dcc.Graph(id="count-bar", responsive=True, style={"height": "100%"})]),
-                        html.Div(className="card", children=[dcc.Graph(id="trend-line", responsive=True, style={"height": "100%"})]),
-                        html.Div(className="card", children=[dcc.Graph(id="source-pie", responsive=True, style={"height": "100%"})]),
-                        html.Div(className="card", children=[dcc.Graph(id="compare-chart", responsive=True, style={"height": "100%"})]),
+                        html.Div(className="card chart-card", children=[dcc.Graph(id="salary-bar", config={"responsive": True}, style={"height": "430px"})]),
+                        html.Div(className="card chart-card", children=[dcc.Graph(id="salary-range", config={"responsive": True}, style={"height": "520px"})]),
+                        html.Div(className="card chart-card", children=[dcc.Graph(id="count-bar", config={"responsive": True}, style={"height": "430px"})]),
+                        html.Div(className="card chart-card", children=[dcc.Graph(id="trend-line", config={"responsive": True}, style={"height": "430px"})]),
+                        html.Div(className="card chart-card", children=[dcc.Graph(id="source-pie", config={"responsive": True}, style={"height": "430px"})]),
+                        html.Div(className="card chart-card", children=[dcc.Graph(id="compare-chart", config={"responsive": True}, style={"height": "460px"})]),
                     ],
                 ),
             ),
@@ -944,6 +944,7 @@ app.layout = html.Div(
     children=[
         dcc.Location(id="url"),
         _navbar(),
+        html.Div(className="top-nav-spacer"),
         html.Main(id="page-content", className="page-container"),
     ],
 )

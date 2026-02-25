@@ -12,8 +12,7 @@ body {
 }
 
 .top-nav {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 100;
   height: 66px;
   display: flex;
@@ -23,6 +22,10 @@ body {
   background: rgba(15, 23, 42, 0.92);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.top-nav-spacer {
+  height: 0;
 }
 
 .brand {
@@ -58,9 +61,13 @@ body {
 .page-container {
   width: 100%;
   max-width: 100vw;
-  margin: 8px auto 28px;
+  margin: 12px auto 28px;
   padding: 0 1%;
   box-sizing: border-box;
+}
+
+body .top-nav + .top-nav-spacer {
+  height: 66px;
 }
 
 .page {
@@ -173,6 +180,14 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.chart-card {
+  overflow: hidden;
+}
+
+.chart-card .dash-graph {
+  width: 100%;
 }
 
 .table-grid {
