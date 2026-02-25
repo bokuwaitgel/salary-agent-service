@@ -1596,5 +1596,132 @@ def download_excel(n_clicks: int, table_data: List[Dict[str, object]]):
     return dash.no_update
 
 
+# Backward-compatibility callbacks for stale browser sessions
+@callback(
+    Output("session-store", "data"),
+    Output("chat-session", "value"),
+    Input("interval-component", "n_intervals"),
+    State("session-store", "data"),
+    prevent_initial_call=False,
+)
+def legacy_ensure_session_id(n_intervals: int, session_id: Optional[str]):
+    if session_id:
+        return session_id, session_id
+    new_id = f"session-{uuid.uuid4().hex[:12]}"
+    return new_id, new_id
+
+
+@callback(
+    Output("kpi-container", "children", allow_duplicate=True),
+    Output("salary-bar", "figure", allow_duplicate=True),
+    Output("salary-range", "figure", allow_duplicate=True),
+    Output("count-bar", "figure", allow_duplicate=True),
+    Output("trend-line", "figure", allow_duplicate=True),
+    Output("source-pie", "figure", allow_duplicate=True),
+    Output("avg-scatter", "figure", allow_duplicate=True),
+    Output("detail-table", "data", allow_duplicate=True),
+    Output("detail-table", "columns", allow_duplicate=True),
+    Input("type-selector", "value"),
+    Input("title-filter", "value"),
+    Input("interval-component", "n_intervals"),
+    prevent_initial_call=True,
+)
+def legacy_update_dashboard(
+    selected_type: str,
+    selected_title: object,
+    n_intervals: int,
+):
+    (
+        kpis,
+        bar_fig,
+        range_fig,
+        count_fig,
+        trend_fig,
+        source_fig,
+        compare_fig,
+        _experience_data,
+        _experience_columns,
+        table_data,
+        table_columns,
+        _table_raw,
+        _title_options,
+        _title_value,
+    ) = update_dashboard(selected_type, selected_title, n_intervals)
+
+    return (
+        kpis,
+        bar_fig,
+        range_fig,
+        count_fig,
+        trend_fig,
+        source_fig,
+        compare_fig,
+        table_data,
+        table_columns,
+    )
+
+
+@callback(
+    Output("jobs-source", "options", allow_duplicate=True),
+    Output("jobs-function", "options", allow_duplicate=True),
+    Output("jobs-industry", "options", allow_duplicate=True),
+    Output("jobs-level", "options", allow_duplicate=True),
+    Output("jobs-company", "options", allow_duplicate=True),
+    Output("jobs-count", "children", allow_duplicate=True),
+    Output("jobs-table", "data", allow_duplicate=True),
+    Output("jobs-table", "columns", allow_duplicate=True),
+    Input("jobs-api-search-btn", "n_clicks"),
+    Input("jobs-interval", "n_intervals"),
+    State("jobs-api-search", "value"),
+    State("jobs-source", "value"),
+    State("jobs-function", "value"),
+    State("jobs-industry", "value"),
+    State("jobs-level", "value"),
+    State("jobs-company", "value"),
+    prevent_initial_call=True,
+)
+def legacy_update_jobs_list(
+    n_clicks: int,
+    n_intervals: int,
+    api_search_text: Optional[str],
+    source: Optional[str],
+    selected_function: Optional[str],
+    selected_industry: Optional[str],
+    selected_level: Optional[str],
+    selected_company: Optional[str],
+):
+    (
+        source_options,
+        function_options,
+        industry_options,
+        level_options,
+        company_options,
+        count_text,
+        table_data,
+        table_columns,
+        _table_raw,
+    ) = update_jobs_list(
+        n_clicks,
+        n_intervals,
+        api_search_text,
+        source,
+        selected_function,
+        selected_industry,
+        selected_level,
+        selected_company,
+    )
+
+    return (
+        source_options,
+        function_options,
+        industry_options,
+        level_options,
+        company_options,
+        count_text,
+        table_data,
+        table_columns,
+    )
+
+
 if __name__ == "__main__":
     app.run(debug=True, port="8006")
