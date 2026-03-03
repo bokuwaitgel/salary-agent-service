@@ -15,7 +15,7 @@ class SalaryCalculationOutput(BaseModel):
     average_salary: int = Field(..., description="Market median/average salary in MNT representing typical compensation for this role. Should fall between min and max, typically closer to min for entry-level roles and closer to max for senior roles.")
 
 class SalaryCalculationOutputTable(Base):
-    __tablename__ = 'salary_calculation_output'
+    __tablename__ = 'salary_list'
 
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
@@ -26,6 +26,10 @@ class SalaryCalculationOutputTable(Base):
     job_count = Column(Integer, nullable=True)
     zangia_count = Column(Integer, nullable=True)
     lambda_count = Column(Integer, nullable=True)
+    industry = Column(String, nullable=True)
+    job_function = Column(String, nullable=True)
+    job_level = Column(String, nullable=True)
+    techpack_category = Column(String, nullable=True)
     type = Column(String, nullable=True)
     experience_salary_breakdown = Column(String, nullable=True)
     year = Column(Integer, nullable=True)

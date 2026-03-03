@@ -3,6 +3,7 @@ from typing import List
 from src.service.lambda_global import get_all_data_and_save
 from src.dependencies import get_lambda_sqlalchemy_repository, get_classifier_output_repository
 from src.repositories.database import LambdaJobRepository, JobClassificationOutputRepository
+from schemas.database.lambda_jobs import LambdaJobSchema, LambdaJobTable
 
 from schemas.base_classifier import JobClassificationInput, JobClassificationOutput, JobClassifierAgentConfig, JobClassifierAgent
 from src.agent.agent import AgentProcessor
@@ -18,17 +19,25 @@ load_dotenv()
 dep = get_lambda_sqlalchemy_repository()
 dep_classifier_output = get_classifier_output_repository()
 
+async def get_all_and_save():
+    #gather data
+    await get_all_data_and_save(dep)
+
+
 async def main():
     #get all data from database
     repository: LambdaJobRepository = dep
     classifier_output_repository: JobClassificationOutputRepository = dep_classifier_output
-    datas = repository.get_all()
-    datas = datas[300:]
+    current_year = "2026"
+    current_month = "02"
+    datas = repository.get_by_query(
+        (LambdaJobTable.year == current_year) & (LambdaJobTable.month == current_month)
+    )
 
     print(f"Total jobs in database: {len(datas)}")
     #prepare data for classification
     classification_input = []
-    for data in datas:
+    for data in datas[300:]:
         dict_data = data.__dict__
         classification_input.append((
             JobClassificationInput(
@@ -61,7 +70,7 @@ async def main():
     #     print("----")
 
     # classify data batch that 50 by 50 and save result into database
-    batch_size = 100
+    batch_size = 50
     for i in range(0, len(classification_input), batch_size):
         batch = classification_input[i:i+batch_size]
         # result : List[JobClassificationOutput] | None = await processor.process_batch([item[0] for item in batch])
@@ -97,6 +106,8 @@ async def main():
                 "requirement_reasoning": output.requirement_reasoning,
                 "requirements": json.dumps([req.model_dump() for req in output.requirements], ensure_ascii=False),
                 "benefits_reasoning": output.benefits_reasoning,
+                "year": current_year,
+                "month": current_month,
                 "benefits": json.dumps([benefit.model_dump() for benefit in output.benefits], ensure_ascii=False),
                 "confidence_scores": json.dumps(output.confidence_scores, ensure_ascii=False) if output.confidence_scores else None,
                 "source_job": f"lambda"
@@ -107,3 +118,4 @@ async def main():
         print(f"Batch {i//batch_size + 1}: Classified and saved {len(batch)} jobs.")
 if __name__ == "__main__":
     asyncio.run(main())
+    # asyncio.run(get_all_and_save())

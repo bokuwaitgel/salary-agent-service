@@ -1,5 +1,5 @@
-from src.dependencies import  get_salary_calculation_output_repository
-from src.repositories.database import SalaryCalculationOutputRepository
+from src.dependencies import get_salary_calculation_output_repository, get_classifier_output_repository
+from src.repositories.database import SalaryCalculationOutputRepository, JobClassificationOutputTable
 from schemas.salary_agent import SalaryAgentOutput, SalaryAgent, SalaryAgentConfig, SalaryAgentInput, MainSalaryAgentData, JobXEducationLevel 
 from schemas.base_classifier import JobClassificationOutput
 from src.agent.agent import AgentProcessor
@@ -29,6 +29,9 @@ techpack_category_data_path = "results/techpack_category_map.json"
 paylab_data_path = "additional_data/paylab_job_data.json"
 statista_data_path = "additional_data/salary_statistics.json"
 
+current_year = 2026
+current_month = 3
+
 config = SalaryAgentConfig()
 agent = SalaryAgent(config=config)
 processor = AgentProcessor(agent=agent)
@@ -52,11 +55,149 @@ additional_data = {
 }
 
 repository: SalaryCalculationOutputRepository = get_salary_calculation_output_repository()
+classifier_repository = get_classifier_output_repository()
+_group_maps_cache = None
+
+
+def _load_group_maps_from_db():
+    datas = classifier_repository.get_by_query(
+        (JobClassificationOutputTable.year == str(current_year)) & (JobClassificationOutputTable.month == f"{current_month:02d}")
+    )
+    print(f"Total classified jobs in database: {len(datas)}")
+
+    function_map = {}
+    industry_map = {}
+    job_level_map = {}
+    techpack_category_map = {}
+
+    def _update_bucket(target_map, category, job_payload, source_name):
+        if not category:
+            return
+        if category not in target_map:
+            target_map[category] = {
+                "count": 0,
+                "lambda": 0,
+                "zangia": 0,
+                "jobs": []
+            }
+        target_map[category]["count"] += 1
+        target_map[category]["jobs"].append(job_payload)
+
+        if source_name == "lambda":
+            target_map[category]["lambda"] += 1
+        elif source_name == "zangia":
+            target_map[category]["zangia"] += 1
+
+    for data in datas:
+        dict_data = data.__dict__.copy()
+        source = str(dict_data.get("source_job", "")).strip().lower()
+
+        requirements = dict_data.get("requirements")
+        if isinstance(requirements, str):
+            try:
+                requirements = json.loads(requirements)
+            except json.JSONDecodeError:
+                requirements = []
+
+        main_data = MainSalaryAgentData(
+            title=dict_data.get("title", ""),
+            company_name=dict_data.get("company_name"),
+            job_function=dict_data.get("job_function"),
+            job_level=dict_data.get("job_level"),
+            experience_level=dict_data.get("experience_level"),
+            education_level=dict_data.get("education_level"),
+            salary_min=dict_data.get("salary_min"),
+            salary_max=dict_data.get("salary_max"),
+            requirements=requirements if isinstance(requirements, list) else [],
+            job_industry=dict_data.get("job_industry")
+        )
+        job_payload = main_data.model_dump()
+
+        _update_bucket(function_map, dict_data.get("job_function"), job_payload, source)
+        _update_bucket(industry_map, dict_data.get("job_industry"), job_payload, source)
+        _update_bucket(job_level_map, dict_data.get("job_level"), job_payload, source)
+        _update_bucket(techpack_category_map, dict_data.get("job_techpack_category"), job_payload, source)
+
+    return {
+        "function": function_map,
+        "industry": industry_map,
+        "job_level": job_level_map,
+        "techpack_category": techpack_category_map,
+    }
+
+
+def _get_group_maps_from_db():
+    global _group_maps_cache
+    if _group_maps_cache is None:
+        _group_maps_cache = _load_group_maps_from_db()
+    return _group_maps_cache
+
+
+async def industry_salary():
+    industry_map = _get_group_maps_from_db().get("industry", {})
+    #load SalaryAgentInput
+    for industry, details in industry_map.items():
+        #ignore Бусад
+        if industry == "Бусад":
+            continue
+
+        jobs = details.get("jobs", [])
+        job_inputs = []
+        for job in jobs:
+            job_input = MainSalaryAgentData(**job)
+            job_inputs.append(job_input)
+        salary_input = SalaryAgentInput(
+            title=industry,
+            main_data=job_inputs,
+            additional_data=additional_data
+        )
+
+        result = await processor.calculate_salary(job_data=salary_input)
+        print(f"Salary analysis for industry: {industry}")
+        print(result)
+        print("----")
+
+        if result:
+            experience_salary_breakdown = "["
+            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+            for item in experience_salary_breakdown_list:
+                education_level = item.experience_level
+                min_salary = item.salary_min
+                max_salary = item.salary_max
+                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                #dump experience salary breakdown into json string
+                experience_salary_breakdown += json.dumps({
+                    "education_level": education_level,
+                    "min_salary": min_salary,
+                    "max_salary": max_salary
+                }, ensure_ascii=False) + ","
+
+            experience_salary_breakdown += "]"
+
+            data_output = {
+                "title": industry,
+                "reasoning": result.reasoning, 
+                "min_salary": result.min_salary,
+                "max_salary": result.max_salary,
+                "average_salary": result.average_salary,
+                "job_count": details.get("count", 0),
+                "zangia_count": details.get("zangia", 0),
+                "lambda_count": details.get("lambda", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
+                "industry": industry,
+                "job_function": "all",
+                "job_level": "all",
+                "techpack_category": "all",
+                "type": "industry",
+                "year": current_year,
+                "month": current_month,
+            }
+
+            repository.create(data_output)
+            print(f"Saved salary analysis for industry: {industry}")
 
 async def functional_salary():
-
-    data = open(function_data_path, "r", encoding="utf-8").read()
-    function_map = json.loads(data)
+    function_map = _get_group_maps_from_db().get("function", {})
     #load SalaryAgentInput
     for function, details in function_map.items():
         #ignore Бусад
@@ -108,83 +249,97 @@ async def functional_salary():
                 "average_salary": result.average_salary,
                 "job_count": details.get("count", 0),
                 "experience_salary_breakdown": experience_salary_breakdown,
+                "industry": "all",
+                "job_function": function,
+                "job_level": "all",
+                "techpack_category": "all",
                 "zangia_count": details.get("zangia", 0),
                 "lambda_count": details.get("lambda", 0),
                 "type": "function",
-                "year": 2025,
-                "month": 2,
+                "year": current_year,
+                "month": current_month,
             }
 
             repository.create(data_output)
             print(f"Saved salary analysis for function: {function}")
-
-async def industry_salary():
-
-    data = open(industry_data_path, "r", encoding="utf-8").read()
-    industry_map = json.loads(data)
-    #load SalaryAgentInput
+    
+    # get all industry data for all function salary analysis
+    industry_map = _get_group_maps_from_db().get("industry", {})
+    # industry -> function -> datas map for analysis of function salary by industry
     for industry, details in industry_map.items():
-        #ignore Бусад
         if industry == "Бусад":
             continue
-
         jobs = details.get("jobs", [])
-        job_inputs = []
+        industry_function_map = {}
         for job in jobs:
-            job_input = MainSalaryAgentData(**job)
-            job_inputs.append(job_input)
-
-
+            job_function = job.get("job_function", "Бусад")
+            if job_function not in industry_function_map:
+                industry_function_map[job_function] = []
+            industry_function_map[job_function].append(job)
         
-        salary_input = SalaryAgentInput(
-            title=industry,
-            main_data=job_inputs,
-            additional_data=additional_data
-        )
+        for function, function_jobs in industry_function_map.items():
+            if function == "Бусад":
+                continue
+            job_inputs = []
+            for job in function_jobs:
+                job_input = MainSalaryAgentData(**job)
+                job_inputs.append(job_input)
 
-        result = await processor.calculate_salary(job_data=salary_input)
-        print(f"Salary analysis for industry: {industry}")
-        print(result)
-        print("----")
+            salary_input = SalaryAgentInput(
+                title=f"{industry} - {function}",
+                main_data=job_inputs,
+                additional_data=additional_data
+            )
 
-        if result:
-            experience_salary_breakdown = "["
-            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
-            for item in experience_salary_breakdown_list:
-                education_level = item.experience_level
-                min_salary = item.salary_min
-                max_salary = item.salary_max
-                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
-                #dump experience salary breakdown into json string
-                experience_salary_breakdown += json.dumps({
-                    "education_level": education_level,
-                    "min_salary": min_salary,
-                    "max_salary": max_salary
-                }, ensure_ascii=False) + ","
+            result = await processor.calculate_salary(job_data=salary_input)
+            print(f"Salary analysis for industry: {industry}, function: {function}")
+            print(result)
+            print("----")
 
-            experience_salary_breakdown += "]"
+            if result:
+                experience_salary_breakdown = "["
+                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                for item in experience_salary_breakdown_list:
+                    education_level = item.experience_level
+                    min_salary = item.salary_min
+                    max_salary = item.salary_max
+                    print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                    #dump experience salary breakdown into json string
+                    experience_salary_breakdown += json.dumps({
+                        "education_level": education_level,
+                        "min_salary": min_salary,
+                        "max_salary": max_salary
+                    }, ensure_ascii=False) + ","
 
-            data_output = {
-                "title": industry,
-                "reasoning": result.reasoning, 
-                "min_salary": result.min_salary,
-                "max_salary": result.max_salary,
-                "average_salary": result.average_salary,
-                "job_count": details.get("count", 0),
-                "zangia_count": details.get("zangia", 0),
-                "lambda_count": details.get("lambda", 0),
-                "experience_salary_breakdown": experience_salary_breakdown,
-                "type": "industry",
-                "year": 2025,
-                "month": 2,
-            }
+                experience_salary_breakdown += "]"
 
-            repository.create(data_output)
-            print(f"Saved salary analysis for industry: {industry}")
+                data_output = {
+                    "title": f"{industry} - {function}",
+                    "reasoning": result.reasoning, 
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(function_jobs),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": industry,
+                    "job_function": function,
+                    "job_level": "all",
+                    "techpack_category": "all",
+                    "zangia_count": len([job for job in function_jobs if job.get("source_job") == "zangia"]),
+                    "lambda_count": len([job for job in function_jobs if job.get("source_job") == "lambda"]),
+                    "type": "function_by_industry",
+                    "year": 2025,
+                    "month": 2,
+                }
+
+                repository.create(data_output)
+                print(f"Saved salary analysis for industry: {industry}, function: {function}")
+
+            
+    
 
 async def job_level_salary():
-    data = open(job_level_data_path, "r", encoding="utf-8").read()
-    job_level_map = json.loads(data)
+    job_level_map = _get_group_maps_from_db().get("job_level", {})
     #load SalaryAgentInput
     for job_level, details in job_level_map.items():
         #ignore Бусад
@@ -238,16 +393,244 @@ async def job_level_salary():
                 "lambda_count": details.get("lambda", 0),
                 "experience_salary_breakdown": experience_salary_breakdown,
                 "type": "job_level",
-                "year": 2025,
-                "month": 2,
+                "industry": "all",
+                "job_function": "all",
+                "job_level": job_level,
+                "techpack_category": "all",
+                "year": current_year,
+                "month": current_month,
             }
 
             repository.create(data_output)
             print(f"Saved salary analysis for job level: {job_level}")
 
+    # get all industry data for all job level salary analysis
+    industry_map = _get_group_maps_from_db().get("industry", {})
+    # industry -> job level -> datas map for analysis of job level salary by industry
+    for industry, details in industry_map.items():
+        if industry == "Бусад":
+            continue
+        jobs = details.get("jobs", [])
+        industry_job_level_map = {}
+        for job in jobs:
+            job_level = job.get("job_level", "Бусад")
+            if job_level not in industry_job_level_map:
+                industry_job_level_map[job_level] = []
+            industry_job_level_map[job_level].append(job)
+        
+        for job_level, job_level_jobs in industry_job_level_map.items():
+            if job_level == "Бусад":
+                continue
+            job_inputs = []
+            for job in job_level_jobs:
+                job_input = MainSalaryAgentData(**job)
+                job_inputs.append(job_input)
+
+            salary_input = SalaryAgentInput(
+                title=f"{industry} - {job_level}",
+                main_data=job_inputs,
+                additional_data=additional_data
+            )
+
+            result = await processor.calculate_salary(job_data=salary_input)
+            print(f"Salary analysis for industry: {industry}, job level: {job_level}")
+            print(result)
+            print("----")
+
+            if result:
+                experience_salary_breakdown = "["
+                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                for item in experience_salary_breakdown_list:
+                    education_level = item.experience_level
+                    min_salary = item.salary_min
+                    max_salary = item.salary_max
+                    print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                    #dump experience salary breakdown into json string
+                    experience_salary_breakdown += json.dumps({
+                        "education_level": education_level,
+                        "min_salary": min_salary,
+                        "max_salary": max_salary
+                    }, ensure_ascii=False) + ","
+
+                experience_salary_breakdown += "]"
+
+                data_output = {
+                    "title": f"{industry} - {job_level}",
+                    "reasoning": result.reasoning, 
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(job_level_jobs),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": industry,
+                    "job_function": "all",
+                    "job_level": job_level,
+                    "techpack_category": "all",
+                    "zangia_count": len([job for job in job_level_jobs if job.get("source_job") == "zangia"]),
+                    "lambda_count": len([job for job in job_level_jobs if job.get("source_job") == "lambda"]),
+                    "type": "job_level_by_industry",
+                    "year": current_year,
+                    "month": current_month,
+                }
+                repository.create(data_output)
+                print(f"Saved salary analysis for industry: {industry}, job level: {job_level}")
+        
+    # get all function data for all job level salary analysis
+    function_map = _get_group_maps_from_db().get("function", {})
+    # function -> job level -> datas map for analysis of job level salary by function
+    for function, details in function_map.items():
+        if function == "Бусад":
+            continue
+        jobs = details.get("jobs", [])
+        function_job_level_map = {}
+        for job in jobs:
+            job_level = job.get("job_level", "Бусад")
+            if job_level not in function_job_level_map:
+                function_job_level_map[job_level] = []
+            function_job_level_map[job_level].append(job)
+        
+        for job_level, job_level_jobs in function_job_level_map.items():
+            if job_level == "Бусад":
+                continue
+            job_inputs = []
+            for job in job_level_jobs:
+                job_input = MainSalaryAgentData(**job)
+                job_inputs.append(job_input)
+
+            salary_input = SalaryAgentInput(
+                title=f"{function} - {job_level}",
+                main_data=job_inputs,
+                additional_data=additional_data
+            )
+
+            result = await processor.calculate_salary(job_data=salary_input)
+            print(f"Salary analysis for function: {function}, job level: {job_level}")
+            print(result)
+            print("----")
+
+            if result:
+                experience_salary_breakdown = "["
+                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                for item in experience_salary_breakdown_list:
+                    education_level = item.experience_level
+                    min_salary = item.salary_min
+                    max_salary = item.salary_max
+                    print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                    #dump experience salary breakdown into json string
+                    experience_salary_breakdown += json.dumps({
+                        "education_level": education_level,
+                        "min_salary": min_salary,
+                        "max_salary": max_salary
+                    }, ensure_ascii=False) + ","
+
+                experience_salary_breakdown += "]"
+
+                data_output = {
+                    "title": f"{function} - {job_level}",
+                    "reasoning": result.reasoning, 
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(job_level_jobs),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": "all",
+                    "job_function": function,
+                    "job_level": job_level,
+                    "techpack_category": "all",
+                    "zangia_count": len([job for job in job_level_jobs if job.get("source_job") == "zangia"]),
+                    "lambda_count": len([job for job in job_level_jobs if job.get("source_job") == "lambda"]),
+                    "type": "job_level_by_function",
+                    "year": current_year,
+                    "month": current_month,
+                }
+                repository.create(data_output)
+                print(f"Saved salary analysis for function: {function}, job level: {job_level}")
+
+    # industry + function + job level combination salary analysis
+    for industry, industry_details in industry_map.items():
+        #ignore Бусад
+        if industry == "Бусад":
+            continue
+
+        industry_jobs = industry_details.get("jobs", [])
+        industry_function_map = {}
+        for job in industry_jobs:
+            job_function = job.get("job_function", "Бусад")
+            if job_function not in industry_function_map:
+                industry_function_map[job_function] = []
+            industry_function_map[job_function].append(job)
+        for function, function_jobs in industry_function_map.items():
+            #ignore Бусад
+            if function == "Бусад":
+                continue
+            function_job_level_map = {}
+            for job in function_jobs:
+                job_level = job.get("job_level", "Бусад")
+                if job_level not in function_job_level_map:
+                    function_job_level_map[job_level] = []
+                function_job_level_map[job_level].append(job)
+
+                for job_level, job_level_jobs in function_job_level_map.items():
+                    #ignore Бусад
+                    if job_level == "Бусад":
+                        continue
+                    job_inputs = []
+                    for job in job_level_jobs:
+                        job_input = MainSalaryAgentData(**job)
+                        job_inputs.append(job_input)
+
+                    salary_input = SalaryAgentInput(
+                        title=f"{industry} - {function} - {job_level}",
+                        main_data=job_inputs,
+
+                        additional_data=additional_data
+                    )
+                    result = await processor.calculate_salary(job_data=salary_input)
+                    print(f"Salary analysis for industry: {industry}, function: {function}, job level: {job_level}")
+                    print(result)
+                    print("----")
+                    if result:
+
+                        experience_salary_breakdown = "["
+                        experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                        for item in experience_salary_breakdown_list:
+                            education_level = item.experience_level
+                            min_salary = item.salary_min
+                            max_salary = item.salary_max
+                            print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                            #dump experience salary breakdown into json string
+                            experience_salary_breakdown += json.dumps({
+                                "education_level": education_level,
+                                "min_salary": min_salary,
+                                "max_salary": max_salary
+                            }, ensure_ascii=False) + ","
+
+                        experience_salary_breakdown += "]"
+                        data_output = {
+                            "title": f"{industry} - {function} - {job_level}",
+                            "reasoning": result.reasoning, 
+                            "min_salary": result.min_salary,
+                            "max_salary": result.max_salary,
+                            "average_salary": result.average_salary,
+                            "job_count": len(job_level_jobs),
+                            "experience_salary_breakdown": experience_salary_breakdown,
+                            "industry": industry,
+                            "job_function": function,
+                            "job_level": job_level,
+                            "techpack_category": "all",
+                            "zangia_count": len([job for job in job_level_jobs if job.get("source_job") == "zangia"]),
+                            "lambda_count": len([job for job in job_level_jobs if job.get("source_job") == "lambda"]),
+                            "type": "job_level_by_industry_function",
+                            "year": current_year,
+                            "month": current_month,
+                        }
+                        repository.create(data_output)
+                        print(f"Saved salary analysis for industry: {industry}, function: {function}, job level: {job_level}")
+
+        
+
 async def techpack_category_salary():
-    data = open(techpack_category_data_path, "r", encoding="utf-8").read()
-    techpack_category_map = json.loads(data)
+    techpack_category_map = _get_group_maps_from_db().get("techpack_category", {})
     #load SalaryAgentInput
     for techpack_category, details in techpack_category_map.items():
         #ignore Бусад
@@ -300,258 +683,560 @@ async def techpack_category_salary():
                 "lambda_count": details.get("lambda", 0),
                 "experience_salary_breakdown": experience_salary_breakdown,
                 "type": "techpack_category",
-                "year": 2025,
-                "month": 2,
+                "industry": "all",
+                "job_function": "all",
+                "job_level": "all",
+                "techpack_category": techpack_category,
+                "year": current_year,
+                "month": current_month,
             }
 
             repository.create(data_output)
             print(f"Saved salary analysis for techpack category: {techpack_category}")
+        
 
-async def all_salary():
-    # function data
-    function = repository.get_by_type("function")
-    function_inputs = []
-    func_jobs = 0
-    func_zangia = 0
-    func_lambda = 0
-    for item in function:
-        dict_item = item.__dict__
-        function_input = MainSalaryAgentData(
-            title=dict_item.get("title", ""),
-            company_name=None,
-            job_function=dict_item.get("title", ""),
-            job_level=None,
-            experience_level=None,
-            education_level=None,
-            salary_min=dict_item.get("min_salary", None),
-            salary_max=dict_item.get("max_salary", None),
-            requirements=[],
-            job_industry=None
-        )
-        func_jobs += dict_item.get("job_count", 0)
-        func_zangia += dict_item.get("zangia_count", 0)
-        func_lambda += dict_item.get("lambda_count", 0)
-        function_inputs.append(function_input)
+    # industry + techpack category combination salary analysis
+    industry_map = _get_group_maps_from_db().get("industry", {})
+    # industry -> techpack category -> datas map for analysis of techpack category salary by industry
+    for industry, industry_details in industry_map.items():
+        #ignore Бусад
+        if industry == "Бусад":
+            continue
 
-    salary_input = SalaryAgentInput(
-        title="All Functional Salary Analysis",
-        main_data=function_inputs,
-        additional_data={}
-    )
+        industry_jobs = industry_details.get("jobs", [])
+        industry_techpack_category_map = {}
+        for job in industry_jobs:
+            job_techpack_category = job.get("job_techpack_category", "Бусад")
+            if job_techpack_category not in industry_techpack_category_map:
+                industry_techpack_category_map[job_techpack_category] = []
+            industry_techpack_category_map[job_techpack_category].append(job)
+        for techpack_category, techpack_category_jobs in industry_techpack_category_map.items():
+            #ignore Бусад
+            if techpack_category == "Бусад":
+                continue
+            job_inputs = []
+            for job in techpack_category_jobs:
+                job_input = MainSalaryAgentData(**job)
+                job_inputs.append(job_input)
 
-    result = await processor.calculate_salary(job_data=salary_input)
-    print(f"Salary analysis for all functions")
-    print(result)
-    print("----")
+            salary_input = SalaryAgentInput(
+                title=f"{industry} - {techpack_category}",
+                main_data=job_inputs,
+                additional_data=additional_data
+            )
+            result = await processor.calculate_salary(job_data=salary_input)
+            print(f"Salary analysis for industry: {industry}, techpack category: {techpack_category}")
+            print(result)
+            print("----")
+            if result:
 
+                experience_salary_breakdown = "["
+                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                for item in experience_salary_breakdown_list:
+                    education_level = item.experience_level
+                    min_salary = item.salary_min
+                    max_salary = item.salary_max
+                    print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                    #dump experience salary breakdown into json string
+                    experience_salary_breakdown += json.dumps({
+                        "education_level": education_level,
+                        "min_salary": min_salary,
+                        "max_salary": max_salary
+                    }, ensure_ascii=False) + ","
+
+                experience_salary_breakdown += "]"
+                data_output = {
+                    "title": f"{industry} - {techpack_category}",
+                    "reasoning": result.reasoning, 
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(techpack_category_jobs),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": industry,
+                    "job_function": "all",
+                    "job_level": "all",
+                    "techpack_category": techpack_category,
+                    "zangia_count": len([job for job in techpack_category_jobs if job.get("source_job") == "zangia"]),
+                    "lambda_count": len([job for job in techpack_category_jobs if job.get("source_job") == "lambda"]),
+                    "type": "techpack_category_by_industry",
+                    "year": current_year,
+                    "month": current_month,
+                }
+                repository.create(data_output)
+                print(f"Saved salary analysis for industry: {industry}, techpack category: {techpack_category}")
+
+    # function + techpack category combination salary analysis
+    function_map = _get_group_maps_from_db().get("function", {})
+    # function -> techpack category -> datas map for analysis of techpack category salary by function
+    for function, function_details in function_map.items():
+        #ignore Бусад
+        if function == "Бусад":
+            continue
+
+        function_jobs = function_details.get("jobs", [])
+        function_techpack_category_map = {}
+        for job in function_jobs:
+            job_techpack_category = job.get("job_techpack_category", "Бусад")
+            if job_techpack_category not in function_techpack_category_map:
+                function_techpack_category_map[job_techpack_category] = []
+            function_techpack_category_map[job_techpack_category].append(job)
+        for techpack_category, techpack_category_jobs in function_techpack_category_map.items():
+            #ignore Бусад
+            if techpack_category == "Бусад":
+                continue
+            job_inputs = []
+            for job in techpack_category_jobs:
+                job_input = MainSalaryAgentData(**job)
+                job_inputs.append(job_input)
+
+            salary_input = SalaryAgentInput(
+                title=f"{function} - {techpack_category}",
+                main_data=job_inputs,
+                additional_data=additional_data
+            )
+            result = await processor.calculate_salary(job_data=salary_input)
+            print(f"Salary analysis for function: {function}, techpack category: {techpack_category}")
+            print(result)
+            print("----")
+            if result:
+
+                experience_salary_breakdown = "["
+                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                for item in experience_salary_breakdown_list:
+                    education_level = item.experience_level
+                    min_salary = item.salary_min
+                    max_salary = item.salary_max
+                    print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                    #dump experience salary breakdown into json string
+                    experience_salary_breakdown += json.dumps({
+                        "education_level": education_level,
+                        "min_salary": min_salary,
+                        "max_salary": max_salary
+                    }, ensure_ascii=False) + ","
+
+                experience_salary_breakdown += "]"
+                data_output = {
+                    "title": f"{function} - {techpack_category}",
+                    "reasoning": result.reasoning, 
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(techpack_category_jobs),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": "all",
+                    "job_function": function,
+                    "job_level": "all",
+                    "techpack_category": techpack_category,
+                    "zangia_count": len([job for job in techpack_category_jobs if job.get("source_job") == "zangia"]),
+                    "lambda_count": len([job for job in techpack_category_jobs if job.get("source_job") == "lambda"]),
+                    "type": "techpack_category_by_function",
+                    "year": current_year,
+                    "month": current_month,
+                }
+                repository.create(data_output)
+                print(f"Saved salary analysis for function: {function}, techpack category: {techpack_category}")
+
+    # level + techpack category combination salary analysis
+    job_level_map = _get_group_maps_from_db().get("job_level", {})
+    # job level -> techpack category -> datas map for analysis of techpack category salary by job level
+    for job_level, job_level_details in job_level_map.items():
+        #ignore Бусад
+        if job_level == "Бусад":
+            continue
+
+        job_level_jobs = job_level_details.get("jobs", [])
+        job_level_techpack_category_map = {}
+        for job in job_level_jobs:
+            job_techpack_category = job.get("job_techpack_category", "Бусад")
+            if job_techpack_category not in job_level_techpack_category_map:
+                job_level_techpack_category_map[job_techpack_category] = []
+            job_level_techpack_category_map[job_techpack_category].append(job)
+        for techpack_category, techpack_category_jobs in job_level_techpack_category_map.items():
+            #ignore Бусад
+            if techpack_category == "Бусад":
+                continue
+            job_inputs = []
+            for job in techpack_category_jobs:
+                job_input = MainSalaryAgentData(**job)
+                job_inputs.append(job_input)
+
+            salary_input = SalaryAgentInput(
+                title=f"{job_level} - {techpack_category}",
+                main_data=job_inputs,
+                additional_data=additional_data
+            )
+            result = await processor.calculate_salary(job_data=salary_input)
+            print(f"Salary analysis for job level: {job_level}, techpack category: {techpack_category}")
+            print(result)
+            print("----")
+            if result:
+
+                experience_salary_breakdown = "["
+                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                for item in experience_salary_breakdown_list:
+                    education_level = item.experience_level
+                    min_salary = item.salary_min
+                    max_salary = item.salary_max
+                    print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                    #dump experience salary breakdown into json string
+                    experience_salary_breakdown += json.dumps({
+                        "education_level": education_level,
+                        "min_salary": min_salary,
+                        "max_salary": max_salary
+                    }, ensure_ascii=False) + ","
+
+                experience_salary_breakdown += "]"
+                data_output = {
+                    "title": f"{job_level} - {techpack_category}",
+                    "reasoning": result.reasoning, 
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(techpack_category_jobs),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": "all",
+                    "job_function": "all",
+                    "job_level": job_level,
+                    "techpack_category": techpack_category,
+                    "zangia_count": len([job for job in techpack_category_jobs if job.get("source_job") == "zangia"]),
+                    "lambda_count": len([job for job in techpack_category_jobs if job.get("source_job") == "lambda"]),
+                    "type": "techpack_category_by_job_level",
+                    "year": current_year,
+                    "month": current_month,
+                }
+
+                repository.create(data_output)
+                print(f"Saved salary analysis for job level: {job_level}, techpack category: {techpack_category}")
+
+    # industry + function + job level + techpack category combination salary analysis
+    for industry, industry_details in industry_map.items():
+        #ignore Бусад
+        if industry == "Бусад":
+            continue
+
+        industry_jobs = industry_details.get("jobs", [])
+        industry_function_map = {}
+        for job in industry_jobs:
+            job_function = job.get("job_function", "Бусад")
+            if job_function not in industry_function_map:
+                industry_function_map[job_function] = []
+            industry_function_map[job_function].append(job)
+        for function, function_jobs in industry_function_map.items():
+            #ignore Бусад
+            if function == "Бусад":
+                continue
+            function_job_level_map = {}
+            for job in function_jobs:
+                job_level = job.get("job_level", "Бусад")
+                if job_level not in function_job_level_map:
+                    function_job_level_map[job_level] = []
+                function_job_level_map[job_level].append(job)
+
+                for job_level, job_level_jobs in function_job_level_map.items():
+                    #ignore Бусад
+                    if job_level == "Бусад":
+                        continue
+                    job_techpack_category_map = {}
+                    for job in job_level_jobs:
+                        job_techpack_category = job.get("job_techpack_category", "Бусад")
+                        if job_techpack_category not in job_techpack_category_map:
+                            job_techpack_category_map[job_techpack_category] = []
+                        job_techpack_category_map[job_techpack_category].append(job)
+
+                    for techpack_category, techpack_category_jobs in job_techpack_category_map.items():
+                        #ignore Бусад
+                        if techpack_category == "Бусад":
+                            continue
+                        job_inputs = []
+                        for job in techpack_category_jobs:
+                            job_input = MainSalaryAgentData(**job)
+                            job_inputs.append(job_input)
+
+                        salary_input = SalaryAgentInput(
+                            title=f"{industry} - {function} - {job_level} - {techpack_category}",
+                            main_data=job_inputs,
+                            additional_data=additional_data
+                        )
+                        result = await processor.calculate_salary(job_data=salary_input)
+                        print(f"Salary analysis for industry: {industry}, function: {function}, job level: {job_level}, techpack category: {techpack_category}")
+                        print(result)
+                        print("----")
+                        if result:
+
+                            experience_salary_breakdown = "["
+                            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                            for item in experience_salary_breakdown_list:
+                                education_level = item.experience_level
+                                min_salary = item.salary_min
+                                max_salary = item.salary_max
+                                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                                #dump experience salary breakdown into json string
+                                experience_salary_breakdown += json.dumps({
+                                    "education_level": education_level,
+                                    "min_salary": min_salary,
+                                    "max_salary": max_salary
+                                }, ensure_ascii=False) + ","
+                            experience_salary_breakdown += "]"
+                            data_output = {
+                                "title": f"{industry} - {function} - {job_level} - {techpack_category} Salary Analysis",
+                                "reasoning": result.reasoning,
+                                "min_salary": result.min_salary,
+                                "max_salary": result.max_salary,
+                                "average_salary": result.average_salary,
+                                "job_count": len(techpack_category_jobs),
+                                "experience_salary_breakdown": experience_salary_breakdown,
+                                "type": "detailed",
+                                "industry": industry,
+                                "job_function": function,
+                                "job_level": job_level,
+                                "techpack_category": techpack_category,
+                                "year": current_year,
+                                "month": current_month,
+                            }
+                            repository.create(data_output)
+                            print(f"Saved salary analysis for {industry} - {function} - {job_level} - {techpack_category}")
+
+    # industry + function + techpack category combination salary analysis
+    for industry, industry_details in industry_map.items():
+        #ignore Бусад
+        if industry == "Бусад":
+            continue
+
+        industry_jobs = industry_details.get("jobs", [])
+        industry_function_map = {}
+        for job in industry_jobs:
+            job_function = job.get("job_function", "Бусад")
+            if job_function not in industry_function_map:
+                industry_function_map[job_function] = []
+            industry_function_map[job_function].append(job)
+        for function, function_jobs in industry_function_map.items():
+            #ignore Бусад
+            if function == "Бусад":
+                continue
+            function_techpack_category_map = {}
+            for job in function_jobs:
+                job_techpack_category = job.get("job_techpack_category", "Бусад")
+                if job_techpack_category not in function_techpack_category_map:
+                    function_techpack_category_map[job_techpack_category] = []
+                function_techpack_category_map[job_techpack_category].append(job)
+
+            for techpack_category, techpack_category_jobs in function_techpack_category_map.items():
+                #ignore Бусад
+                if techpack_category == "Бусад":
+                    continue
+                job_inputs = []
+                for job in techpack_category_jobs:
+                    job_input = MainSalaryAgentData(**job)
+                    job_inputs.append(job_input)
+
+                salary_input = SalaryAgentInput(
+                    title=f"{industry} - {function} - {techpack_category}",
+                    main_data=job_inputs,
+                    additional_data=additional_data
+                )
+                result = await processor.calculate_salary(job_data=salary_input)
+                print(f"Salary analysis for industry: {industry}, function: {function}, techpack category: {techpack_category}")
+                print(result)
+                print("----")
+                if result:
+
+                    experience_salary_breakdown = "["
+                    experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                    for item in experience_salary_breakdown_list:
+                        education_level = item.experience_level
+                        min_salary = item.salary_min
+                        max_salary = item.salary_max
+                        print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                        #dump experience salary breakdown into json string
+                        experience_salary_breakdown += json.dumps({
+                            "education_level": education_level,
+                            "min_salary": min_salary,
+                            "max_salary": max_salary
+                        }, ensure_ascii=False) + ","
+                    experience_salary_breakdown += "]"
+                    data_output = {
+                        "title": f"{industry} - {function} - {techpack_category} Salary Analysis",
+                        "reasoning": result.reasoning,
+                        "min_salary": result.min_salary,
+                        "max_salary": result.max_salary,
+                        "average_salary": result.average_salary,
+                        "job_count": len(techpack_category_jobs),
+                        "experience_salary_breakdown": experience_salary_breakdown,
+                        "type": "industry_function_techpack_category",
+                        "industry": industry,
+                        "job_function": function,
+                        "job_level": "all",
+                        "techpack_category": techpack_category,
+                        "year": current_year,
+                        "month": current_month,
+                    }
+                    repository.create(data_output)
+                    print(f"Saved salary analysis for industry: {industry}, function: {function}, techpack category: {techpack_category}")
+    #industry + job level + techpack category combination salary analysis
+    for industry, industry_details in industry_map.items():
+        #ignore Бусад
+        if industry == "Бусад":
+            continue
+
+        industry_jobs = industry_details.get("jobs", [])
+        industry_job_level_map = {}
+        for job in industry_jobs:
+            job_level = job.get("job_level", "Бусад")
+            if job_level not in industry_job_level_map:
+                industry_job_level_map[job_level] = []
+            industry_job_level_map[job_level].append(job)
+        for job_level, job_level_jobs in industry_job_level_map.items():
+            #ignore Бусад
+            if job_level == "Бусад":
+                continue
+            job_level_techpack_category_map = {}
+            for job in job_level_jobs:
+                job_techpack_category = job.get("job_techpack_category", "Бусад")
+                if job_techpack_category not in job_level_techpack_category_map:
+                    job_level_techpack_category_map[job_techpack_category] = []
+                job_level_techpack_category_map[job_techpack_category].append(job)
+
+            for techpack_category, techpack_category_jobs in job_level_techpack_category_map.items():
+                #ignore Бусад
+                if techpack_category == "Бусад":
+                    continue
+                job_inputs = []
+                for job in techpack_category_jobs:
+                    job_input = MainSalaryAgentData(**job)
+                    job_inputs.append(job_input)
+
+                salary_input = SalaryAgentInput(
+                    title=f"{industry} - {job_level} - {techpack_category}",
+                    main_data=job_inputs,
+                    additional_data=additional_data
+                )
+                result = await processor.calculate_salary(job_data=salary_input)
+                print(f"Salary analysis for industry: {industry}, job level: {job_level}, techpack category: {techpack_category}")
+                print(result)
+                print("----")
+                if result:
+
+                    experience_salary_breakdown = "["
+                    experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                    for item in experience_salary_breakdown_list:
+                        education_level = item.experience_level
+                        min_salary = item.salary_min
+                        max_salary = item.salary_max
+                        print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                        #dump experience salary breakdown into json string
+                        experience_salary_breakdown += json.dumps({
+                            "education_level": education_level,
+                            "min_salary": min_salary,
+                            "max_salary": max_salary
+                        })
+                    experience_salary_breakdown += "]"
+                    data_output = {
+                        "title": f"{industry} - {job_level} - {techpack_category} Salary Analysis",
+                        "reasoning": result.reasoning,
+                        "min_salary": result.min_salary,
+                        "max_salary": result.max_salary,
+                        "average_salary": result.average_salary,
+                        "job_count": len(techpack_category_jobs),
+                        "experience_salary_breakdown": experience_salary_breakdown,
+                        "type": "industry_job_level_techpack_category",
+                        "industry": industry,
+                        "job_function": "all",
+                        "job_level": job_level,
+                        "techpack_category": techpack_category,
+                        "year": current_year,
+                        "month": current_month,
+                    }
+                    repository.create(data_output)
+                    print(f"Saved salary analysis for industry: {industry}, job level: {job_level}, techpack category: {techpack_category}")
+
+    # function + job level + techpack category combination salary analysis
+    for function, function_details in function_map.items():
+        #ignore Бусад
+        if function == "Бусад":
+            continue
+
+        function_jobs = function_details.get("jobs", [])
+        function_job_level_map = {}
+        for job in function_jobs:
+            job_level = job.get("job_level", "Бусад")
+            if job_level not in function_job_level_map:
+                function_job_level_map[job_level] = []
+            function_job_level_map[job_level].append(job)
+
+        for job_level, job_level_jobs in function_job_level_map.items():
+            #ignore Бусад
+            if job_level == "Бусад":
+                continue
+            job_level_techpack_category_map = {}
+            for job in job_level_jobs:
+                job_techpack_category = job.get("job_techpack_category", "Бусад")
+                if job_techpack_category not in job_level_techpack_category_map:
+                    job_level_techpack_category_map[job_techpack_category] = []
+                job_level_techpack_category_map[job_techpack_category].append(job)
+
+            for techpack_category, techpack_category_jobs in job_level_techpack_category_map.items():
+                #ignore Бусад
+                if techpack_category == "Бусад":
+                    continue
+                job_inputs = []
+                for job in techpack_category_jobs:
+                    job_input = MainSalaryAgentData(**job)
+                    job_inputs.append(job_input)
+
+                salary_input = SalaryAgentInput(
+                    title=f"{function} - {job_level} - {techpack_category}",
+                    main_data=job_inputs,
+                    additional_data=additional_data
+                )
+                result = await processor.calculate_salary(job_data=salary_input)
+                print(f"Salary analysis for function: {function}, job level: {job_level}, techpack category: {techpack_category}")
+                print(result)
+                print("----")
+                if result:
+
+                    experience_salary_breakdown = "["
+                    experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
+                    for item in experience_salary_breakdown_list:
+                        education_level = item.experience_level
+                        min_salary = item.salary_min
+                        max_salary = item.salary_max
+                        print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
+                        #dump experience salary breakdown into json string
+                        experience_salary_breakdown += json.dumps({
+                            "education_level": education_level,
+                            "min_salary": min_salary,
+                            "max_salary": max_salary
+                        }, ensure_ascii=False) + ","
+
+                    experience_salary_breakdown += "]"
+                    data_output = {
+                        "title": f"{function} - {job_level} - {techpack_category} Salary Analysis",
+                        "reasoning": result.reasoning,
+                        "min_salary": result.min_salary,
+                        "max_salary": result.max_salary,
+                        "average_salary": result.average_salary,
+                        "job_count": len(techpack_category_jobs),
+                        "experience_salary_breakdown": experience_salary_breakdown,
+                        "type": "function_job_level_techpack_category",
+                        "industry": "all",
+                        "job_function": function,
+                        "job_level": job_level,
+                        "techpack_category": techpack_category,
+                        "year": current_year,
+                        "month": current_month,
+                    }
+                    repository.create(data_output)
+                    print(f"Saved salary analysis for function: {function}, job level: {job_level}, techpack category: {techpack_category}")
     
-    #save result to database
-    if result:
-        data_output = {
-            "title": "All Functional Salary Analysis",
-            "reasoning": result.reasoning, 
-            "min_salary": result.min_salary,
-            "max_salary": result.max_salary,
-            "average_salary": result.average_salary,
-            "job_count": func_jobs,
-            "zangia_count": func_zangia,
-            "lambda_count": func_lambda,
-            "type": "all_function",
-            "year": 2025,
-            "month": 2,
-        }
-
-        repository.create(data_output)
-        print(f"Saved salary analysis for all functions")
-
-    industry_salary = repository.get_by_type("industry")
-    
-    industry_inputs = []
-    ind_jobs = 0
-    ind_zangia = 0
-    ind_lambda = 0
-    for item in industry_salary:
-        dict_item = item.__dict__
-        industry_input = MainSalaryAgentData(
-            title=dict_item.get("title", ""),
-            company_name=None,
-            job_function=None,
-            job_level=None,
-            experience_level=None,
-            education_level=None,
-            salary_min=dict_item.get("min_salary", None),
-            salary_max=dict_item.get("max_salary", None),
-            requirements=[],
-            job_industry=dict_item.get("title", "")
-        )
-        ind_jobs += dict_item.get("job_count", 0)
-        ind_zangia += dict_item.get("zangia_count", 0)
-        ind_lambda += dict_item.get("lambda_count", 0)
-        industry_inputs.append(industry_input)
-    
-    salary_input = SalaryAgentInput(
-        title="All Industry Salary Analysis",
-        main_data=industry_inputs,
-        additional_data={}
-    )
-
-    ind_result = await processor.calculate_salary(job_data=salary_input)
-    print(f"Salary analysis for all industries")
-    print(ind_result)
-    print("----")
-
-    if ind_result:
-        data_output = {
-            "title": "All Industry Salary Analysis",
-            "reasoning": ind_result.reasoning, 
-            "min_salary": ind_result.min_salary,
-            "max_salary": ind_result.max_salary,
-            "average_salary": ind_result.average_salary,
-            "job_count": ind_jobs,
-            "zangia_count": ind_zangia,
-            "lambda_count": ind_lambda,
-            "type": "all_industry",
-            "year": 2025,
-            "month": 2,
-        }
-
-        repository.create(data_output)
-        print(f"Saved salary analysis for all industries")
-    
-    job_level_salary = repository.get_by_type("job_level")
-
-    job_level_inputs = []
-    jl_jobs = 0
-    jl_zangia = 0
-    jl_lambda = 0
-
-    for item in job_level_salary:
-        dict_item = item.__dict__
-        job_level_input = MainSalaryAgentData(
-            title=dict_item.get("title", ""),
-            company_name=None,
-            job_function=None,
-            job_level=dict_item.get("title", ""),
-            experience_level=None,
-            education_level=None,
-            salary_min=dict_item.get("min_salary", None),
-            salary_max=dict_item.get("max_salary", None),
-            requirements=[],
-            job_industry=None
-        )
-        jl_jobs += dict_item.get("job_count", 0)
-        jl_zangia += dict_item.get("zangia_count", 0)
-        jl_lambda += dict_item.get("lambda_count", 0)
-        job_level_inputs.append(job_level_input)
-
-    salary_input = SalaryAgentInput(
-        title="All Job Level Salary Analysis",
-        main_data=job_level_inputs,
-        additional_data={}
-    )
-
-    jl_result = await processor.calculate_salary(job_data=salary_input)
-    print(f"Salary analysis for all job levels")
-    print(jl_result)
-    print("----")
-    if jl_result:
-        is_experience_salary_breakdown = True
-       
-        experience_salary_breakdown = "["
-        if is_experience_salary_breakdown:
-            experience_salary_breakdown_list = jl_result.experience_salary_breakdown
-            for item in experience_salary_breakdown_list:
-                education_level = getattr(item, "education_level", None)
-                min_salary = getattr(item, "min_salary", None)
-                max_salary = getattr(item, "max_salary", None)
-                print(f"Education Level: {education_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
-                #dump experience salary breakdown into json string
-                experience_salary_breakdown += json.dumps({
-                    "education_level": education_level,
-                    "min_salary": min_salary,
-                    "max_salary": max_salary
-                }, ensure_ascii=False) + ","
-
-        experience_salary_breakdown += "]"
-
-        data_output = {
-            "title": "All Job Level Salary Analysis",
-            "reasoning": jl_result.reasoning, 
-            "min_salary": jl_result.min_salary,
-            "max_salary": jl_result.max_salary,
-            "average_salary": jl_result.average_salary,
-            "job_count": jl_jobs,
-            "zangia_count": jl_zangia,
-            "lambda_count": jl_lambda,
-            "type": "all_job_level",
-            "year": 2025,
-            "month": 2,
-        }
-
-        repository.create(data_output)
-        print(f"Saved salary analysis for all job levels")
-    
-    
-    techpack_category_salary = repository.get_by_type("techpack_category")
-    techpack_category_inputs = []
-    tc_jobs = 0
-    tc_zangia = 0
-    tc_lambda = 0
-    for item in techpack_category_salary:
-        dict_item = item.__dict__
-        techpack_category_input = MainSalaryAgentData(
-            title=dict_item.get("title", ""),
-            company_name=None,
-            job_function=None,
-            job_level=None,
-            experience_level=None,
-            education_level=None,
-            salary_min=dict_item.get("min_salary", None),
-            salary_max=dict_item.get("max_salary", None),
-            requirements=[],
-            job_industry=None
-        )
-        tc_jobs += dict_item.get("job_count", 0)
-        tc_zangia += dict_item.get("zangia_count", 0)
-        tc_lambda += dict_item.get("lambda_count", 0)
-        techpack_category_inputs.append(techpack_category_input)
-
-    salary_input = SalaryAgentInput(
-        title="All Techpack Category Salary Analysis",
-        main_data=techpack_category_inputs,
-        additional_data={}
-    )
-
-    tc_result = await processor.calculate_salary(job_data=salary_input)
-    print(f"Salary analysis for all techpack categories")
-    print(tc_result)
-    print("----")
-    if tc_result:
-        data_output = {
-            "title": "All Techpack Category Salary Analysis",
-            "reasoning": tc_result.reasoning, 
-            "min_salary": tc_result.min_salary,
-            "max_salary": tc_result.max_salary,
-            "average_salary": tc_result.average_salary,
-            "job_count": tc_jobs,
-            "zangia_count": tc_zangia,
-            "lambda_count": tc_lambda,
-            "type": "all_techpack_category",
-            "year": 2025,
-            "month": 2,
-        }
-
-        repository.create(data_output)
-        print(f"Saved salary analysis for all techpack categories")
-
 
 
 async def main():
     """Main function to run all salary calculations sequentially."""
-    await functional_salary()
     await industry_salary()  
-    await job_level_salary()
-    await techpack_category_salary()
+    # await functional_salary()
+    # await job_level_salary()
+    # await techpack_category_salary()
     # await all_salary()
 
 if __name__ == "__main__":

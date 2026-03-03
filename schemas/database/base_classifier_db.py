@@ -12,10 +12,10 @@ Base = declarative_base()
 class JobClassificationOutput(BaseModel):
     """Output data for job classification."""
     title: str = Field(..., description="Predicted job title")
-    job_function: JobFunctionCategory = Field(..., description="Predicted job function category")
     job_industry: JobIndustryCategory = Field(..., description="Predicted job industry category")
-    job_techpack_category: JobTechpackCategory = Field(..., description="Predicted job category based on techpack classification")
+    job_function: JobFunctionCategory = Field(..., description="Predicted job function category")
     job_level: UnifiedJobLevelCategory = Field(..., description="Predicted unified job level category")
+    job_techpack_category: JobTechpackCategory = Field(..., description="Predicted job category based on techpack classification")
     experience_level: ExperienceLevel = Field(..., description="Predicted experience level category")
     education_level: EducationLevel = Field(..., description="Predicted education level category")
     salary_min: int= Field(..., description="Minimum salary in MNT based on classification input or estimation")
@@ -25,11 +25,13 @@ class JobClassificationOutput(BaseModel):
     requirements: List[JobRequirement] = Field(default_factory=list, description="List of identified job requirements", min_length=0, max_length=5)
     benefits_reasoning: str = Field(..., description="Explanation of how the input data led to the identified benefits and bonuses")
     benefits: List[JobBenefit] = Field(default_factory=list, description="List of identified job benefits and bonuses", min_length=0, max_length=5)
+    year: str = Field(..., description="Year of the job classification")
+    month: str = Field(..., description="Month of the job classification")
     confidence_scores: Optional[dict[str, float]] = Field(None, description="Confidence scores for each predicted category")
 
 
 class JobClassificationOutputTable(Base):
-    __tablename__ = 'job_classification_output'
+    __tablename__ = 'job_classification'
 
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
@@ -47,4 +49,6 @@ class JobClassificationOutputTable(Base):
     benefits_reasoning = Column(Text, nullable=False)
     benefits = Column(Text, nullable=True)  # JSON string of JobBenefit list
     confidence_scores = Column(Text, nullable=True)  # JSON string of confidence scores dict
+    year = Column(String, nullable=False)
+    month = Column(String, nullable=False)
     source_job = Column(String, nullable=True)  # Optional field to link back to the original job listing (e.g., job ID or source name)

@@ -30,13 +30,15 @@ class ZangiaJobSchema(BaseModel):
     search_requirements: Optional[str] = Field(None, description="Job requirements")
     timetype: Optional[str] = Field(None, description="Type of employment (e.g., full-time)")
     title: Optional[str] = Field(None, description="Job title")
+    year: Optional[str] = Field(None, description="Year of the job posting")
+    month: Optional[str] = Field(None, description="Month of the job posting")
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow, description="Record creation timestamp")
 
 
 Base = declarative_base()
 
 class ZangiaJobTable(Base):
-    __tablename__ = 'zangia_jobs'
+    __tablename__ = 'zangia_job_list'
 
     id = Column(String, primary_key=True)
     company_name = Column(String, nullable=True)
@@ -51,4 +53,6 @@ class ZangiaJobTable(Base):
     search_requirements = Column(String, nullable=True)
     timetype = Column(String, nullable=True)
     title = Column(String, nullable=True)
+    year = Column(String, nullable=True)
+    month = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.now(), nullable=False)

@@ -4,7 +4,7 @@ from typing import Any, List, Union
 from sqlalchemy.orm import Session
 
 from schemas.database.zangia_jobs import ZangiaJobTable
-from schemas.database.lambda_jobs import LambdaJobTable
+from schemas.database.lambda_jobs import LambdaJobTable, LambdaJobTable_before
 from schemas.database.base_classifier_db import JobClassificationOutputTable
 from schemas.database.salary_calculation_db import SalaryCalculationOutputTable
 
@@ -38,6 +38,9 @@ class ZangiaJobRepository(DatabaseRepository):
 
     def get_all(self) -> List[ZangiaJobTable]:
         return self.db_session.query(ZangiaJobTable).all()
+    
+    def get_query(self, query) -> List[ZangiaJobTable]:
+        return self.db_session.query(ZangiaJobTable).filter(query).all()
 
     def create(self, obj_in: BaseModel) -> ZangiaJobTable:
         data = obj_in.model_dump(exclude_none=True)
@@ -84,6 +87,9 @@ class ZangiaJobRepository(DatabaseRepository):
 
 
 class LambdaJobRepository(DatabaseRepository):
+    def get_by_query(self, query) -> List[LambdaJobTable]:
+        return self.db_session.query(LambdaJobTable).filter(query).all()
+
     def get_by_id(self, record_id: int) -> LambdaJobTable:
         return self.db_session.query(LambdaJobTable).filter(LambdaJobTable.id == record_id).first()
 
@@ -116,7 +122,7 @@ class LambdaJobRepository(DatabaseRepository):
                 data = obj_in.model_dump(exclude_none=True)
                 if not data.get("id"):
                     raise ValueError("LambdaJob requires non-empty `id`.")
-                
+                print(data["id"])
                 # Check if already exists
                 existing = self.db_session.query(LambdaJobTable).filter(LambdaJobTable.id == data["id"]).first()
                 if existing:
@@ -148,6 +154,9 @@ class LambdaJobRepository(DatabaseRepository):
 class JobClassificationOutputRepository(DatabaseRepository):
     def get_by_id(self, record_id: int) -> JobClassificationOutputTable:
         return self.db_session.query(JobClassificationOutputTable).filter(JobClassificationOutputTable.id == record_id).first()
+
+    def get_by_query(self, query) -> List[JobClassificationOutputTable]:
+        return self.db_session.query(JobClassificationOutputTable).filter(query).all()
 
     def get_all(self) -> List[JobClassificationOutputTable]:
         return self.db_session.query(JobClassificationOutputTable).all()
@@ -208,6 +217,23 @@ class SalaryCalculationOutputRepository(DatabaseRepository):
         if check_existing:
             print(f"Record for {obj_in.get('title')} ({obj_in.get('type')}) for {obj_in.get('month')}/{obj_in.get('year')} already exists. Skipping creation.")
             return check_existing
+
+        data = obj_in.copy()
+        db_obj = SalaryCalculationOutputTable(**data)
+        self.db_session.add(db_obj)
+        self.db_session.commit()
+        return db_obj
+
+    def upsert(self, obj_in: dict) -> SalaryCalculationOutputTable:
+        existing = self.check_exists(obj_in)
+        if existing:
+            for field, value in obj_in.items():
+                if field == "id":
+                    continue
+                if hasattr(existing, field):
+                    setattr(existing, field, value)
+            self.db_session.commit()
+            return existing
 
         data = obj_in.copy()
         db_obj = SalaryCalculationOutputTable(**data)

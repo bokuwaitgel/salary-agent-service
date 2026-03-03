@@ -122,6 +122,8 @@ class SalaryAgent(Agent):
             else:
                 inputs.append(additional_data_binary)
 
+        # print(inputs)
+
         result = await self.agent.run(inputs)   
         print(f"Salary analysis result usage: {result.usage()}")
 

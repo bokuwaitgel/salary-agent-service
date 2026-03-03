@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import re
+import asyncio
 from enum import Enum
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, cast
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
@@ -66,20 +69,17 @@ class UnifiedJobLevelCategory(str, Enum):
         return multipliers.get(self, 1.0)
 
 class ExperienceLevel(str, Enum):
-    """Experience level categories."""
-    ENTRY = "0-2"  # 0-2 years
-    JUNIOR = "2-4"  # 2-4 years
-    INTERMEDIATE = "4-7"  # 4-7 years
-    SENIOR = "7-10"  # 7-10 years
-    EXPERT = "10+"  # 10+ years
+    """Experience level categories. as 0-36month, 37-84month, 85+ month"""
+    ENTRY = "0-36"
+    INTERMEDIATE = "37-84"
+    EXPERT = "85+"
+
     @property
     def years_range(self) -> tuple[int, int]:
         ranges = {
-            ExperienceLevel.ENTRY: (0, 2),
-            ExperienceLevel.JUNIOR: (2, 4),
-            ExperienceLevel.INTERMEDIATE: (4, 7),
-            ExperienceLevel.SENIOR: (7, 10),
-            ExperienceLevel.EXPERT: (10, 50)
+            ExperienceLevel.ENTRY: (0, 36),
+            ExperienceLevel.INTERMEDIATE: (37, 84),
+            ExperienceLevel.EXPERT: (85, 1000)
         }
         return ranges.get(self, (0, 2))
 
@@ -87,9 +87,7 @@ class ExperienceLevel(str, Enum):
     def salary_multiplier(self) -> float:
         multipliers = {
             ExperienceLevel.ENTRY: 0.7,
-            ExperienceLevel.JUNIOR: 0.9,
             ExperienceLevel.INTERMEDIATE: 1.0,
-            ExperienceLevel.SENIOR: 1.3,
             ExperienceLevel.EXPERT: 1.6
         }
         return multipliers.get(self, 1.0)
@@ -332,23 +330,53 @@ class JobClassifierAgentConfig(BaseModel):
     """Configuration for the Job Classification Agent."""
     system_prompt: str = Field(
          default=(
-             "You are a job classification agent that categorizes job listings based on their title, description, company, and industry. "
-             "Your task is to analyze the provided job information and classify it into the following categories:"
-                "1. Job Function: (e.g., Sales, Marketing, IT, Finance, etc.)\n" 
-                "2. Job Industry: (e.g., Technology, Healthcare, Finance, etc.)\n"
-                "3. Job Techpack Category: (e.g., CEO, Software Engineer, Product Designer, etc.)\n"
-                "4. Unified Job Level: (e.g., Executive Management, Senior Management, Middle Management, Specialist Senior, Specialist, Staff)\n"
-                "5. Experience Level: (e.g., Entry, Junior, Intermediate, Senior, Expert)\n"
-                "6. Education Level: (e.g., High School, Vocational, Bachelor, Master, Doctorate)\n"
-                "In addition to classification, identify up to 5 key job requirements and up to 5 benefits/bonuses mentioned in the job description. "
-                "Provide reasoning for each classification and identified requirement/benefit based on the input data. "
-                "Respond in Mongolian language."
-                "When providing the output, ensure it is structured according to the JobClassificationOutput format, including all required fields and explanations."
-                "When multiple  job listings are provided in batch, classify each one individually and return a list of classifications and extracted information for each listing."
+             "You are a high-precision job classification agent. "
+             "Classify each job listing using this strict priority pipeline: Industry -> Function -> Level -> Techpack Category.\n"
+             "Decision order rules:\n"
+             "1) First decide Job Industry from strongest evidence (company domain, recruiter_industry, description).\n"
+             "2) Then decide Job Function consistent with selected Industry and role duties.\n"
+             "3) Then decide Unified Job Level from seniority/authority signals in title and responsibilities.\n"
+             "4) Then decide Techpack Category, ensuring consistency with Function and Level.\n"
+             "5) Then decide Experience Level and Education Level.\n"
+             "Consistency rules:\n"
+             "- Avoid OTHER unless evidence is genuinely unclear.\n"
+             "- Function and Techpack must not contradict each other.\n"
+             "- Executive titles must not be labeled as Staff/Specialist unless explicit evidence says otherwise.\n"
+             "- Use provided enum values exactly.\n"
+             "Extraction rules:\n"
+             "- Extract up to 5 requirements and up to 5 benefits from the source text only.\n"
+             "- Keep all reasoning and extracted text in Mongolian.\n"
+             "Output rules:\n"
+             "- Return valid JobClassificationOutput.\n"
+             "- Always include short, evidence-based reasoning for requirement_reasoning and benefits_reasoning (1-3 sentences each).\n"
+             "- For confidence_scores, include keys: job_industry, job_function, job_level, job_techpack_category, overall with values in [0,1].\n"
+             "Batch mode: classify each listing independently and return one output per input in the same order."
             ),
         description="System prompt that guides the agent's behavior and response format."
     )
     model_name: str = Field(default="google-gla:gemini-2.5-pro", description="Name of the language model to use for classification.")
+    fallback_model_names: List[str] = Field(
+        default_factory=lambda: ["google-gla:gemini-2.5-flash"],
+        description="Fallback model names used when the primary model request fails."
+    )
+    max_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum number of listings sent in one batch model request."
+    )
+    retry_attempts: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Number of retries for failed model calls."
+    )
+    retry_backoff_seconds: float = Field(
+        default=1.0,
+        ge=0,
+        le=30,
+        description="Base backoff in seconds between retries."
+    )
 
 class JobClassifierAgent(Agent):
     """Agent for classifying job listings into various categories and extracting requirements and benefits."""
@@ -358,24 +386,265 @@ class JobClassifierAgent(Agent):
         self.agent = Agent(model=self.config.model_name, system_prompt=self.config.system_prompt, output_type=JobClassificationOutput)
         self.batch_agent = Agent(model=self.config.model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
 
+    def _get_model_candidates(self) -> List[str]:
+        candidates = [self.config.model_name, *self.config.fallback_model_names]
+        # preserve order and remove duplicates
+        uniq: list[str] = []
+        for model in candidates:
+            if model and model not in uniq:
+                uniq.append(model)
+        return uniq
+
+    def _build_single_agent(self, model_name: str) -> Any:
+        return Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=JobClassificationOutput)
+
+    def _build_batch_agent(self, model_name: str) -> Any:
+        return Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        cleaned = text.lower().replace("_", " ")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    def _match_industry_from_input(self, job_input: JobClassificationInput) -> Optional[JobIndustryCategory]:
+        recruiter_industry = ""
+        if isinstance(job_input.additional_info, dict):
+            recruiter_industry = str(job_input.additional_info.get("recruiter_industry", "") or "")
+
+        candidate_texts = [
+            recruiter_industry,
+            job_input.company_name or "",
+            job_input.job_title or "",
+            job_input.job_description or "",
+        ]
+        merged = self._normalize_text(" ".join(candidate_texts))
+        recruiter_norm = self._normalize_text(recruiter_industry)
+
+        if recruiter_norm:
+            for industry in JobIndustryCategory:
+                industry_norm = self._normalize_text(industry.value)
+                if recruiter_norm == industry_norm or recruiter_norm in industry_norm or industry_norm in recruiter_norm:
+                    return industry
+
+        for industry in JobIndustryCategory:
+            if industry == JobIndustryCategory.OTHER:
+                continue
+            industry_norm = self._normalize_text(industry.value)
+            if industry_norm and industry_norm in merged:
+                return industry
+
+        return None
+
+    def _infer_function_from_title(self, title: str) -> Optional[JobFunctionCategory]:
+        title_norm = self._normalize_text(title)
+        keyword_map: dict[JobFunctionCategory, list[str]] = {
+            JobFunctionCategory.IT_TELECOM: ["developer", "software", "програм", "it", "систем", "ml", "data engineer", "devops", "qa", "security admin"],
+            JobFunctionCategory.FINANCE_ACCOUNTING: ["санхүү", "нягтлан", "accountant", "finance", "cfo", "auditor", "эдийн засагч"],
+            JobFunctionCategory.HR: ["хүний нөөц", "hr", "talent", "recruit"],
+            JobFunctionCategory.MARKETING_PR: ["маркетинг", "brand", "pr", "контент", "social media"],
+            JobFunctionCategory.SALES: ["борлуулалт", "sales", "account manager", "business sales"],
+            JobFunctionCategory.BUSINESS_DEVELOPMENT: ["бизнес хөгжил", "business development", "partnership"],
+            JobFunctionCategory.PROJECT_ALL: ["project manager", "төслийн", "pmo", "program manager"],
+            JobFunctionCategory.ENGINEERING_TECHNICAL: ["инженер", "техник", "maintenance", "architect"],
+            JobFunctionCategory.ADMINISTRATION: ["захиргаа", "office", "admin"],
+            JobFunctionCategory.CUSTOMER_SERVICE: ["customer", "харилцагч", "call center", "support"],
+            JobFunctionCategory.PROCUREMENT: ["худалдан авалт", "procurement", "sourcing", "buyer"],
+            JobFunctionCategory.LEGAL: ["хууль", "legal", "compliance"],
+            JobFunctionCategory.DISTRIBUTION_TRANSPORT: ["логистик", "тээвэр", "warehouse", "driver", "жолооч"],
+            JobFunctionCategory.EXECUTIVE_MANAGEMENT: ["гүйцэтгэх захирал", "ceo", "general director", "ерөнхий захирал", "director"],
+        }
+
+        for function, keywords in keyword_map.items():
+            if any(k in title_norm for k in keywords):
+                return function
+        return None
+
+    def _infer_level_from_title(self, title: str) -> Optional[UnifiedJobLevelCategory]:
+        title_norm = self._normalize_text(title)
+
+        if any(k in title_norm for k in ["ceo", "гүйцэтгэх захирал", "chief", "ерөнхий захирал"]):
+            return UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT
+        if any(k in title_norm for k in ["захирал", "director", "head of", "албаны дарга"]):
+            return UnifiedJobLevelCategory.SENIOR_MANAGEMENT
+        if any(k in title_norm for k in ["менежер", "manager", "supervisor", "team lead", "ахлагч"]):
+            return UnifiedJobLevelCategory.MIDDLE_MANAGEMENT
+        if any(k in title_norm for k in ["senior", "ахлах", "principal", "lead "]):
+            return UnifiedJobLevelCategory.SPECIALIST_SENIOR
+        if any(k in title_norm for k in ["engineer", "developer", "analyst", "мэргэжилтэн", "инженер", "дизайнер", "нягтлан"]):
+            return UnifiedJobLevelCategory.SPECIALIST
+        if any(k in title_norm for k in ["ажилтан", "assistant", "оператор", "туслах", "жолооч", "касс"]):
+            return UnifiedJobLevelCategory.STAFF
+
+        return None
+
+    def _match_techpack_from_title(self, title: str) -> Optional[JobTechpackCategory]:
+        title_norm = self._normalize_text(title)
+        for category in JobTechpackCategory:
+            if category == JobTechpackCategory.OTHER:
+                continue
+            if self._normalize_text(category.value) == title_norm:
+                return category
+            if self._normalize_text(category.value) in title_norm:
+                return category
+        return None
+
+    def _build_classification_payload(self, job_input: JobClassificationInput) -> str:
+        payload = {
+            "classification_priority": ["job_industry", "job_function", "job_level", "job_techpack_category"],
+            "job": job_input.model_dump(),
+            "taxonomy": {
+                "job_industry_values": [v.value for v in JobIndustryCategory],
+                "job_function_values": [v.value for v in JobFunctionCategory],
+                "job_level_values": [v.value for v in UnifiedJobLevelCategory],
+                "job_techpack_values": [v.value for v in JobTechpackCategory],
+                "experience_values": [v.value for v in ExperienceLevel],
+                "education_values": [v.value for v in EducationLevel],
+            },
+        }
+        return json.dumps(payload, ensure_ascii=False)
+
+    def _refine_output(self, job_input: JobClassificationInput, output: JobClassificationOutput) -> JobClassificationOutput:
+        title = job_input.job_title or output.title
+
+        inferred_industry = self._match_industry_from_input(job_input)
+        inferred_function = self._infer_function_from_title(title)
+        inferred_level = self._infer_level_from_title(title)
+        inferred_techpack = self._match_techpack_from_title(title)
+
+        if inferred_industry and output.job_industry == JobIndustryCategory.OTHER:
+            output.job_industry = inferred_industry
+
+        if inferred_function and output.job_function == JobFunctionCategory.OTHER:
+            output.job_function = inferred_function
+
+        if inferred_level and output.job_level in {UnifiedJobLevelCategory.STAFF, UnifiedJobLevelCategory.SPECIALIST}:
+            if inferred_level in {UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT, UnifiedJobLevelCategory.SENIOR_MANAGEMENT, UnifiedJobLevelCategory.MIDDLE_MANAGEMENT, UnifiedJobLevelCategory.SPECIALIST_SENIOR}:
+                output.job_level = inferred_level
+
+        if inferred_techpack and output.job_techpack_category == JobTechpackCategory.OTHER:
+            output.job_techpack_category = inferred_techpack
+
+        techpack_consistency_map: dict[JobTechpackCategory, tuple[JobFunctionCategory, UnifiedJobLevelCategory]] = {
+            JobTechpackCategory.CEO: (JobFunctionCategory.EXECUTIVE_MANAGEMENT, UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT),
+            JobTechpackCategory.DEPUTY_DIRECTOR: (JobFunctionCategory.EXECUTIVE_MANAGEMENT, UnifiedJobLevelCategory.SENIOR_MANAGEMENT),
+            JobTechpackCategory.CFO: (JobFunctionCategory.FINANCE_ACCOUNTING, UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT),
+            JobTechpackCategory.ARCHITECTURE_DIRECTOR: (JobFunctionCategory.IT_TELECOM, UnifiedJobLevelCategory.SENIOR_MANAGEMENT),
+            JobTechpackCategory.AGRICULTURE_TECH_DIRECTOR: (JobFunctionCategory.ENGINEERING_TECHNICAL, UnifiedJobLevelCategory.SENIOR_MANAGEMENT),
+            JobTechpackCategory.PRODUCT_DESIGN_DIRECTOR: (JobFunctionCategory.CONTENT_DESIGN, UnifiedJobLevelCategory.SENIOR_MANAGEMENT),
+            JobTechpackCategory.HEALTH_TECH_DIRECTOR: (JobFunctionCategory.HEALTHCARE, UnifiedJobLevelCategory.SENIOR_MANAGEMENT),
+            JobTechpackCategory.GENERAL_ACCOUNTANT: (JobFunctionCategory.FINANCE_ACCOUNTING, UnifiedJobLevelCategory.SPECIALIST_SENIOR),
+            JobTechpackCategory.SENIOR_SOFTWARE_DEVELOPER: (JobFunctionCategory.IT_TELECOM, UnifiedJobLevelCategory.SPECIALIST_SENIOR),
+            JobTechpackCategory.SENIOR_PROGRAMMER: (JobFunctionCategory.IT_TELECOM, UnifiedJobLevelCategory.SPECIALIST_SENIOR),
+            JobTechpackCategory.SENIOR_MACHINE_LEARNING_ENGINEER: (JobFunctionCategory.IT_TELECOM, UnifiedJobLevelCategory.SPECIALIST_SENIOR),
+            JobTechpackCategory.SENIOR_DATA_ENGINEER: (JobFunctionCategory.IT_TELECOM, UnifiedJobLevelCategory.SPECIALIST_SENIOR),
+        }
+
+        if output.job_techpack_category in techpack_consistency_map:
+            expected_function, expected_level = techpack_consistency_map[output.job_techpack_category]
+            if output.job_function in {JobFunctionCategory.OTHER, JobFunctionCategory.EXECUTIVE_MANAGEMENT, JobFunctionCategory.IT_TELECOM, JobFunctionCategory.FINANCE_ACCOUNTING, JobFunctionCategory.CONTENT_DESIGN, JobFunctionCategory.ENGINEERING_TECHNICAL, JobFunctionCategory.HEALTHCARE}:
+                output.job_function = expected_function
+            if output.job_level in {UnifiedJobLevelCategory.STAFF, UnifiedJobLevelCategory.SPECIALIST, UnifiedJobLevelCategory.MIDDLE_MANAGEMENT, UnifiedJobLevelCategory.SENIOR_MANAGEMENT, UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT}:
+                # always enforce minimum expected level for known techpack category
+                output.job_level = expected_level
+
+        if output.job_function == JobFunctionCategory.EXECUTIVE_MANAGEMENT and output.job_level in {UnifiedJobLevelCategory.STAFF, UnifiedJobLevelCategory.SPECIALIST}:
+            output.job_level = UnifiedJobLevelCategory.SENIOR_MANAGEMENT
+
+        if output.job_level == UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT and output.job_function == JobFunctionCategory.OTHER:
+            output.job_function = JobFunctionCategory.EXECUTIVE_MANAGEMENT
+
+        if output.confidence_scores is None:
+            output.confidence_scores = {}
+
+        output.confidence_scores.setdefault("job_industry", 0.75 if inferred_industry else 0.6)
+        output.confidence_scores.setdefault("job_function", 0.75 if inferred_function else 0.6)
+        output.confidence_scores.setdefault("job_level", 0.75 if inferred_level else 0.6)
+        output.confidence_scores.setdefault("job_techpack_category", 0.75 if inferred_techpack else 0.6)
+        if "overall" not in output.confidence_scores:
+            vals = [
+                output.confidence_scores.get("job_industry", 0.6),
+                output.confidence_scores.get("job_function", 0.6),
+                output.confidence_scores.get("job_level", 0.6),
+                output.confidence_scores.get("job_techpack_category", 0.6),
+            ]
+            output.confidence_scores["overall"] = round(sum(vals) / len(vals), 3)
+
+        return output
+
+    async def _run_single_with_fallback(self, payload: str, job_input: JobClassificationInput) -> JobClassificationOutput:
+        last_error: Optional[Exception] = None
+        for model_name in self._get_model_candidates():
+            agent = self._build_single_agent(model_name)
+            for attempt in range(self.config.retry_attempts + 1):
+                try:
+                    response = await agent.run(payload)
+                    print("Usage of model:", response.usage())
+                    model_output = cast(JobClassificationOutput, response.output)
+                    return self._refine_output(job_input, model_output)
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < self.config.retry_attempts:
+                        await asyncio.sleep(self.config.retry_backoff_seconds * (attempt + 1))
+                    else:
+                        print(f"Single classification failed on model={model_name}: {exc}")
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Single classification failed for unknown reason.")
+
+    async def _run_batch_chunk_with_fallback(self, job_inputs: List[JobClassificationInput]) -> List[JobClassificationOutput]:
+        payloads = [self._build_classification_payload(item) for item in job_inputs]
+        last_error: Optional[Exception] = None
+
+        for model_name in self._get_model_candidates():
+            agent = self._build_batch_agent(model_name)
+            for attempt in range(self.config.retry_attempts + 1):
+                try:
+                    result = await agent.run(payloads)
+                    print("Batch classification completed.")
+                    print("Usage of model for batch classification:", result.usage())
+                    batch_output = cast(List[JobClassificationOutput], result.output)
+                    outputs: List[JobClassificationOutput] = []
+                    for raw_input, classified in zip(job_inputs, batch_output):
+                        outputs.append(self._refine_output(raw_input, classified))
+
+                    if len(outputs) == len(job_inputs):
+                        return outputs
+                    raise RuntimeError(f"Batch output size mismatch. expected={len(job_inputs)} got={len(outputs)}")
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < self.config.retry_attempts:
+                        await asyncio.sleep(self.config.retry_backoff_seconds * (attempt + 1))
+                    else:
+                        print(f"Batch chunk failed on model={model_name}: {exc}")
+
+        # Fallback to single calls if all batch calls failed
+        single_outputs: List[JobClassificationOutput] = []
+        for item in job_inputs:
+            payload = self._build_classification_payload(item)
+            single_outputs.append(await self._run_single_with_fallback(payload, item))
+        if len(single_outputs) == len(job_inputs):
+            return single_outputs
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Batch classification failed for unknown reason.")
+
     async def classify_job(self, job_input: JobClassificationInput) -> JobClassificationOutput:
         """Classify a job listing and extract requirements and benefits."""
-        response = await self.agent.run(str(job_input.model_dump()))
-        # Here you would implement parsing logic to convert the agent's response into the JobClassificationOutput format.
-        # This is a placeholder for demonstration purposes.
-        print("Usage of model:", response.usage())
-
-        return response.output
+        payload = self._build_classification_payload(job_input)
+        return await self._run_single_with_fallback(payload, job_input)
     
     async def classify_job_batch(self, job_inputs: List[JobClassificationInput]) -> List[JobClassificationOutput]:
         """Classify multiple job listings in batch."""
-        inputs = [str(job_input.model_dump()) for job_input in job_inputs]
-        print(f"Classifying batch of {len(inputs)} job listings...")
-        outputs = []
-        output = await self.batch_agent.run(inputs)
-        print("Batch classification completed.")
-        print("Usage of model for batch classification:", output.usage())
-        outputs.extend(output.output)
+        print(f"Classifying batch of {len(job_inputs)} job listings...")
+        outputs: List[JobClassificationOutput] = []
+        step = self.config.max_batch_size
+        for i in range(0, len(job_inputs), step):
+            chunk = job_inputs[i:i + step]
+            chunk_outputs = await self._run_batch_chunk_with_fallback(chunk)
+            outputs.extend(chunk_outputs)
         print(f"Batch classification produced {len(outputs)} outputs.")
         return outputs
 

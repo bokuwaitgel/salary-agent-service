@@ -6,7 +6,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-
+import datetime
 from schemas.database.lambda_jobs import LambdaJobSchema
 
 #get detail url 
@@ -80,6 +80,10 @@ def get_job_detail_from_request(job_url: str, max_retries: int = 3) -> dict:
 
 async def get_all_data_and_save(repository):
     url = "https://lambda.global/jobs?minSalary=1000000&maxSalary=15000000&page="
+    now = datetime.datetime.now(datetime.timezone.utc)
+    current_year = str(now.year)
+    current_month = f"{(now.month % 12) + 1:02d}"
+
     result_jobs = []
     page=1
     while True:
@@ -100,7 +104,7 @@ async def get_all_data_and_save(repository):
     # Filter jobs that need to be fetched
     jobs_to_fetch = [
         job for job in result_jobs 
-        if job["job_id"] and int(job["job_id"]) not in existing_job_ids
+        if job["job_id"] and f"{current_year}_{current_month}_{job['job_id']}" not in existing_job_ids
     ]
     print(f"Jobs to fetch details for: {len(jobs_to_fetch)}")
     
@@ -127,10 +131,11 @@ async def get_all_data_and_save(repository):
     # Transform API response to match schema
     transformed_jobs = []
     for job in new_jobs:
+        print(job)
         recruiter = job.get("recruiter", {}) or {}
         salary = job.get("salary", {}) or {}
         transformed = {
-            "id": job.get("id"),
+            "id": f"{current_year}_{current_month}_{job.get('id')}",
             "title": job.get("title"),
             "description": job.get("description"),
             "location": job.get("location"),
@@ -158,6 +163,8 @@ async def get_all_data_and_save(repository):
             "recruiter_verified": 1 if recruiter.get("verified") else 0,
             "tags": json.dumps([tag.get("nameMn") for tag in job.get("tags", []) if tag.get("nameMn")], ensure_ascii=False) if job.get("tags") else None,
             "status": job.get("status"),
+            "year": current_year,
+            "month": current_month,
             "api_created_at": job.get("createdAt"),
             "api_updated_at": job.get("updatedAt"),
         }

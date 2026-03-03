@@ -1,6 +1,8 @@
+
 import requests
 from typing import Any, Dict, Iterable, Optional, List, Sequence
 import json
+from datetime import datetime, timezone
 
 from typing import List
 from pydantic import BaseModel
@@ -109,6 +111,17 @@ def get_jobs_using_api():
             items = jobs_page.get("items", [])
             extracted = extract_data_from_list(items)
             all_extracted_data.extend(extracted)
+
+
+    #change id that year_month_id
+    for job in all_extracted_data:
+        #current year and month
+        now = datetime.now(timezone.utc)
+        year = str(now.year)
+        month = f"{now.month:02d}"
+        job["code"] = f"{year}_{month}_{job['code']}"
+        job["year"] = year
+        job["month"] = month
 
     return all_extracted_data
 

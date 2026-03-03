@@ -3,14 +3,17 @@ from src.dependencies import get_zangia_sqlalchemy_repository, get_classifier_ou
 from src.repositories.database import ZangiaJobRepository, JobClassificationOutputRepository
 
 from schemas.base_classifier import JobClassificationInput, JobClassificationOutput, JobClassifierAgentConfig, JobClassifierAgent
+from schemas.database.zangia_jobs import ZangiaJobSchema, ZangiaJobTable
 from src.agent.agent import AgentProcessor
-from typing import List
+from typing import List, Optional, cast
+from datetime import datetime, timezone
 
 import asyncio
 import json
 from dotenv import load_dotenv
 import os
 from markdownify import markdownify as md
+import pandas as pd
 
 load_dotenv()
 
@@ -28,9 +31,20 @@ async def main():
     #get all data from database
     repository: ZangiaJobRepository = dep
     classifier_output_repository: JobClassificationOutputRepository = dep_classifier_output
-    datas = repository.get_all()
+    #filter year month
+    now_utc = datetime.now(timezone.utc)
+    current_year = str(now_utc.year)
+    
+    #current month + 1
+    current_month = f"{now_utc.month:02d}"
+
+    datas = repository.get_query(
+        (ZangiaJobTable.year == current_year) & (ZangiaJobTable.month == current_month)
+    )
     print(f"Total jobs in database: {len(datas)}")
 
+    
+  
     config = JobClassifierAgentConfig()
     agent = JobClassifierAgent(config=config)
     processor = AgentProcessor(agent)
@@ -44,7 +58,7 @@ async def main():
     prepared_data = []
     #ignore first 400 data for now, because I already classified them and saved into database
 
-    for data in datas[2000:]:
+    for data in datas[2600:]:
         dict_data = data.__dict__
         classification_input = JobClassificationInput(
             job_title=dict_data.get("title", ""),
@@ -62,14 +76,14 @@ async def main():
         prepared_data.append((classification_input, dict_data.get("id")))
 
     #classify data batch that 100 by 100 and save result into database
-    batch_size = 400
+    batch_size = 300
     counter = 0
     for i in range(0, len(prepared_data), batch_size):
         batch = prepared_data[i:i+batch_size]
         # 4 time parallel request with 50 batch size each
         tasks = []
-        for j in range(0, len(batch), batch_size//8):
-            sub_batch = batch[j:j+(batch_size//8)]
+        for j in range(0, len(batch), batch_size//6):
+            sub_batch = batch[j:j+(batch_size//6)]
             tasks.append(asyncio.create_task(processor.process_batch([item[0] for item in sub_batch])))
         results = await asyncio.gather(*tasks)
         result = []
@@ -100,6 +114,8 @@ async def main():
                 "benefits_reasoning": output.benefits_reasoning,
                 "benefits": json.dumps([benefit.model_dump() for benefit in output.benefits], ensure_ascii=False),
                 "confidence_scores": json.dumps(output.confidence_scores, ensure_ascii=False) if output.confidence_scores else None,
+                "year": current_year,
+                "month": current_month,
                 "source_job": f"zangia"
             }
 

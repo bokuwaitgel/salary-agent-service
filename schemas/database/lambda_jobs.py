@@ -11,7 +11,7 @@ Base = declarative_base()
 class LambdaJobSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True, extra="ignore")
 
-    id: Optional[int] = Field(None, description="Primary key from Lambda API")
+    id: Optional[str] = Field(None, description="Primary key from Lambda API")
     title: Optional[str] = Field(None, description="Job title")
     description: Optional[str] = Field(None, description="Job description")
     location: Optional[str] = Field(None, description="Job location")
@@ -39,12 +39,51 @@ class LambdaJobSchema(BaseModel):
     recruiter_verified: Optional[int] = Field(None, description="Is recruiter verified (1=yes, 0=no)")
     tags: Optional[str] = Field(None, description="Job tags (JSON array as string)")
     status: Optional[str] = Field(None, description="Job status")
+    year: Optional[str] = Field(None, description="Year of the job posting")
+    month: Optional[str] = Field(None, description="Month of the job posting")
     api_created_at: Optional[datetime] = Field(None, description="Created at from API")
     api_updated_at: Optional[datetime] = Field(None, description="Updated at from API")
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow, description="Record creation timestamp")
 
 
 class LambdaJobTable(Base):
+    __tablename__ = 'lambda_job_list'
+
+    id = Column(String, primary_key=True)
+    title = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    location = Column(String, nullable=True)
+    company_name = Column(String, nullable=True)
+    company_name_mn = Column(String, nullable=True)
+    salary_min = Column(Float, nullable=True)
+    salary_max = Column(Float, nullable=True)
+    salary_type = Column(String, nullable=True)
+    position_type = Column(String, nullable=True)
+    engagement_type = Column(String, nullable=True)
+    pay_type = Column(String, nullable=True)
+    experience = Column(Integer, nullable=True)
+    responsibilities = Column(Text, nullable=True)
+    skills = Column(Text, nullable=True)
+    commitment = Column(String, nullable=True)
+    job_category_id = Column(Integer, nullable=True)
+    deadline = Column(DateTime, nullable=True)
+    slug = Column(String, nullable=True, index=True)
+    view_count = Column(Integer, nullable=True)
+    apply_count = Column(Integer, nullable=True)
+    recruiter_id = Column(Integer, nullable=True)
+    recruiter_company = Column(String, nullable=True)
+    recruiter_industry = Column(String, nullable=True)
+    recruiter_location = Column(String, nullable=True)
+    recruiter_verified = Column(Integer, nullable=True)
+    tags = Column(Text, nullable=True)
+    status = Column(String, nullable=True)
+    year = Column(String, nullable=True)
+    month = Column(String, nullable=True)
+    api_created_at = Column(DateTime, nullable=True)
+    api_updated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now(), nullable=False)
+
+class LambdaJobTable_before(Base):
     __tablename__ = 'lambda_jobs'
 
     id = Column(Integer, primary_key=True)
