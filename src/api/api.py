@@ -1,4 +1,5 @@
 
+import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from typing import Any, Dict, List, cast
@@ -10,8 +11,10 @@ from pydantic import BaseModel, Field, create_model
 from src.api.api_routes import ENDPOINTS
 from src.api import endpoints as _endpoints  # noqa: F401
 
-print("Loading API routes...")
-print(f"Registered endpoints: {list(ENDPOINTS.keys())}")
+logger = logging.getLogger(__name__)
+
+logger.info("Loading API routes...")
+logger.info("Registered endpoints: %s", list(ENDPOINTS.keys()))
 
 load_dotenv()
 app = FastAPI(

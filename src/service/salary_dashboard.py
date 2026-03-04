@@ -2,13 +2,14 @@
 
 import io
 import json
+import logging
 import os
 import re
 import ast
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, SupportsFloat, SupportsIndex, TypedDict, cast
+from typing import Any, Dict, List, Optional, SupportsFloat, SupportsIndex, TypedDict, cast
 
 import dash
 import pandas as pd
@@ -20,6 +21,8 @@ from dotenv import load_dotenv
 from openpyxl.styles import Alignment, Font, PatternFill
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ASSETS_DIR = PROJECT_ROOT / "assets"
@@ -39,10 +42,9 @@ COLORS = {
 }
 
 TYPE_LABELS = {
-    "function": "Чиг үүрэг",
-    "function_by_industry": "Салбар + Чиг үүрэг",
-    "job_level": "Албан тушаалын түвшин",
     "industry": "Үйл ажиллагааны чиглэл/Салбар",
+    "function": "Чиг үүрэг",
+    "job_level": "Албан тушаалын түвшин",
     "techpack_category": "Албан тушаал",
 }
 
@@ -69,10 +71,12 @@ def _post_api_json(route_name: str, payload: Optional[Dict[str, object]] = None,
     try:
         response = requests.post(url, json=payload or {}, timeout=timeout)
         if not response.ok:
+            logger.warning("API %s returned %d: %s", route_name, response.status_code, response.text[:200])
             return None
         data = response.json() if response.content else {}
         return data if isinstance(data, dict) else None
-    except (requests.RequestException, ValueError):
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("API %s request failed: %s", route_name, exc)
         return None
 
 
@@ -81,10 +85,16 @@ def _post_api_bytes(route_name: str, payload: Optional[Dict[str, object]] = None
     try:
         response = requests.post(url, json=payload or {}, timeout=timeout)
         if not response.ok:
+            logger.warning("API %s (bytes) returned %d", route_name, response.status_code)
             return None
         return response.content
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        logger.warning("API %s (bytes) request failed: %s", route_name, exc)
         return None
+
+
+def _send_bytes_download(file_bytes: bytes, filename: str):
+    return dcc.send_bytes(lambda buffer: buffer.write(file_bytes), filename)
 
 
 def _load_data_main() -> pd.DataFrame:
@@ -191,11 +201,121 @@ def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str
     return None
 
 
+def _norm_text(value: object) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip().lower().replace("_", " ")
+    return re.sub(r"\s+", " ", text)
+
+
+def _is_all_like(value: object) -> bool:
+    return _norm_text(value) in {"", "all", "бүгд", "none", "null"}
+
+
+def _normalize_optional_filter(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return None if _is_all_like(cleaned) else cleaned
+
+
+def _safe_selected_values(values: object) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        return [] if _is_all_like(values) else [values]
+    if isinstance(values, (list, tuple, set)):
+        cleaned = [str(v).strip() for v in values if not _is_all_like(v)]
+        seen: set[str] = set()
+        out: List[str] = []
+        for item in cleaned:
+            key = _norm_text(item)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(item)
+        return out
+    return []
+
+
+_SEARCH_SYNONYM_GROUPS: Dict[str, List[str]] = {
+    # Mongolian → English aliases
+    "машин сургалтын инженер": ["machine learning engineer", "ml engineer", "ml", "ai engineer"],
+    "ахлах машин сургалтын инженер": ["senior machine learning engineer", "senior ml engineer", "lead ml engineer"],
+    "програм хангамжийн инженер": ["software engineer", "software developer", "swe", "dev"],
+    "ахлах програм хангамжийн инженер": ["senior software engineer", "senior developer", "lead developer"],
+    "бүтээгдэхүүний менежер": ["product manager", "pm", "product owner"],
+    "төслийн менежер": ["project manager", "project lead"],
+    "өгөгдлийн шинжээч": ["data analyst", "data analytics", "bi analyst"],
+    "өгөгдлийн инженер": ["data engineer", "de", "etl engineer"],
+    "өгөгдлийн шинжлэх ухаанч": ["data scientist", "ds"],
+    "веб хөгжүүлэгч": ["web developer", "frontend developer", "front-end developer"],
+    "систем админ": ["system administrator", "sysadmin", "sys admin", "it admin"],
+    "чанарын инженер": ["qa engineer", "quality assurance", "test engineer", "tester"],
+    "дизайнер": ["designer", "ui designer", "ux designer", "ui/ux designer"],
+    "маркетинг менежер": ["marketing manager", "marketing lead"],
+    "санхүүгийн шинжээч": ["financial analyst", "finance analyst"],
+    "нягтлан бодогч": ["accountant", "accounting"],
+    "хүний нөөцийн менежер": ["hr manager", "human resources manager"],
+    # English → Mongolian aliases
+    "machine learning engineer": ["машин сургалтын инженер", "ml engineer", "ml", "ai engineer"],
+    "senior machine learning engineer": ["ахлах машин сургалтын инженер", "senior ml engineer", "lead ml engineer"],
+    "software engineer": ["програм хангамжийн инженер", "software developer", "swe", "dev"],
+    "product manager": ["бүтээгдэхүүний менежер", "pm", "product owner"],
+    "data analyst": ["өгөгдлийн шинжээч", "bi analyst"],
+    "data engineer": ["өгөгдлийн инженер", "etl engineer"],
+    "data scientist": ["өгөгдлийн шинжлэх ухаанч", "ds"],
+    "qa engineer": ["чанарын инженер", "quality assurance", "test engineer"],
+    "project manager": ["төслийн менежер", "project lead"],
+}
+
+
+def _expand_search_tokens(search_text: str) -> List[str]:
+    normalized = _norm_text(search_text)
+    if not normalized:
+        return []
+
+    expanded: List[str] = []
+    seen: set[str] = set()
+
+    def _add(token: str) -> None:
+        token_norm = _norm_text(token)
+        if token_norm and token_norm not in seen:
+            seen.add(token_norm)
+            expanded.append(token_norm)
+
+    for token in [part for part in normalized.split(" ") if part]:
+        _add(token)
+
+    return expanded
+
+
+def _expand_search_alias_phrases(search_text: str) -> List[str]:
+    normalized = _norm_text(search_text)
+    if not normalized:
+        return []
+
+    aliases: List[str] = []
+    seen: set[str] = set()
+
+    for phrase, phrase_aliases in _SEARCH_SYNONYM_GROUPS.items():
+        phrase_norm = _norm_text(phrase)
+        if not phrase_norm or phrase_norm not in normalized:
+            continue
+        for alias in phrase_aliases:
+            alias_norm = _norm_text(alias)
+            if alias_norm and alias_norm not in seen:
+                seen.add(alias_norm)
+                aliases.append(alias_norm)
+
+    return aliases
+
+
 def _distinct_non_empty_values(df: pd.DataFrame, column_name: str) -> List[str]:
     if df.empty or column_name not in df.columns:
         return []
     values = df[column_name].dropna().astype(str).str.strip()
     values = values[values != ""]
+    values = values[~values.map(_is_all_like)]
     return sorted(values.unique().tolist())
 
 
@@ -221,7 +341,7 @@ def _apply_main_dimension_filters(
         ("month", selected_month),
     ]
     for col, value in dimensions:
-        if col not in filtered.columns or not value or not str(value).strip():
+        if col not in filtered.columns or not value or not str(value).strip() or _is_all_like(value):
             continue
         if col in {"year", "month"}:
             target_num = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
@@ -250,7 +370,7 @@ def _format_mnt_compact(value: Optional[float]) -> str:
     return f"{(float(value) / 1_000_000):.1f}M ₮"
 
 
-def _shorten_label(text: str, max_len: int = 10) -> str:
+def _shorten_label(text: str, max_len: int = 28) -> str:
     if text is None:
         return ""
     text = str(text)
@@ -559,7 +679,11 @@ def _render_chat_messages(history: List[Dict[str, object]]) -> List[html.Div]:
         content = item.get("content", "")
         pending = bool(item.get("pending"))
 
-        bubble_content: object = content
+        if isinstance(content, (str, int, float)) or content is None:
+            bubble_content: Any = content or ""
+        else:
+            bubble_content = str(content)
+
         if pending:
             bubble_content = html.Div(
                 className="typing-indicator",
@@ -674,177 +798,210 @@ def _dashboard_page_layout() -> html.Div:
             html.Div(
                 className="hero",
                 children=[
-                    html.H1("Цалингийн шинжилгээний dashboard", className="hero-title"),
-                    html.P("Мэдээллийн эх сурвалж: Zangia, Lambda Global, Paylab, Salary Statistics.", className="hero-subtitle"),
+                    html.Div(
+                        className="hero-top-row",
+                        children=[
+                            html.Div(
+                                children=[
+                                    html.H1("Цалингийн шинжилгээний dashboard", className="hero-title"),
+                                    html.P("Мэдээллийн эх сурвалж: Zangia, Lambda Global, Paylab, Salary Statistics.", className="hero-subtitle"),
+                                ],
+                            ),
+                            html.Button("💬 Chat", id="chat-toggle", className="chat-toggle-btn", n_clicks=0),
+                        ],
+                    ),
                 ],
             ),
             dcc.Interval(id="interval-component", interval=5 * 60 * 1000, n_intervals=0),
             dcc.Download(id="excel-download"),
             dcc.Store(
                 id="chat-store",
-                data=[{"role": "assistant", "content": "Сайн байна уу 👋 Цалингийн мэдээллээр туслая."}],
+                data=[{"role": "assistant", "content": "Сайн байна уу 👋 Танд цалин, албан тушаалын түвшин, салбарын чиг хандлага болон ажлын зах зээлийн мэдээлэл өгч чадна."}],
             ),
             dcc.Store(id="chat-request"),
-            dcc.Store(id="chat-open", data=False),
+            dcc.Store(id="chat-open", data=True),
             dcc.Store(id="detail-table-raw", data=[]),
             html.Div(
-                className="card jobs-filter-card",
+                id="dashboard-split",
+                className="dashboard-split",
                 children=[
-                    html.Div("Өгөгдлийн сангаас хайлт ба шүүлтүүр", className="jobs-filter-section-title"),
+                    # ── LEFT: main dashboard content ──
                     html.Div(
-                        className="jobs-filter-grid",
+                        id="dashboard-main",
+                        className="dashboard-main",
                         children=[
                             html.Div(
+                                className="card jobs-filter-card",
                                 children=[
-                                    html.Label("Салбар", className="field-label"),
-                                    dcc.Dropdown(id="main-industry", options=[], placeholder="Бүгд", clearable=True),
-                                ]
+                                    html.Div("Өгөгдлийн сангаас хайлт ба шүүлтүүр", className="jobs-filter-section-title"),
+                                    html.Div(
+                                        className="jobs-filter-grid",
+                                        children=[
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Салбар", className="field-label"),
+                                                    dcc.Dropdown(id="main-industry", options=[], placeholder="Бүгд", clearable=True),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Чиг үүрэг", className="field-label"),
+                                                    dcc.Dropdown(id="main-function", options=[], placeholder="Бүгд", clearable=True),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Албан тушаалын түвшин", className="field-label"),
+                                                    dcc.Dropdown(id="main-level", options=[], placeholder="Бүгд", clearable=True),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Албан тушаалын ангилал", className="field-label"),
+                                                    dcc.Dropdown(id="main-category", options=[], placeholder="Бүгд", clearable=True),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Он", className="field-label"),
+                                                    dcc.Dropdown(id="main-year", options=[], placeholder="Бүгд", clearable=True),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                children=[
+                                                    html.Label("Сар", className="field-label"),
+                                                    dcc.Dropdown(id="main-month", options=[], placeholder="Бүгд", clearable=True),
+                                                ]
+                                            ),
+                                        ],
+                                    ),
+                                ],
                             ),
-                            html.Div(
-                                children=[
-                                    html.Label("Функц", className="field-label"),
-                                    dcc.Dropdown(id="main-function", options=[], placeholder="Бүгд", clearable=True),
-                                ]
+                            dcc.Loading(
+                                type="dot",
+                                color=COLORS["primary"],
+                                children=html.Div(id="kpi-container", className="kpi-grid"),
                             ),
-                            html.Div(
-                                children=[
-                                    html.Label("Түвшин", className="field-label"),
-                                    dcc.Dropdown(id="main-level", options=[], placeholder="Бүгд", clearable=True),
-                                ]
+                            dcc.Loading(
+                                type="circle",
+                                color=COLORS["primary"],
+                                children=html.Div(
+                                    className="chart-grid",
+                                    children=[
+                                        html.Div(className="card chart-card", children=[dcc.Graph(id="salary-bar", config={"responsive": True}, style={"height": "430px"})]),
+                                        html.Div(className="card chart-card", children=[dcc.Graph(id="salary-range", config={"responsive": True}, style={"height": "520px"})]),
+                                        html.Div(className="card chart-card", children=[dcc.Graph(id="count-bar", config={"responsive": True}, style={"height": "430px"})]),
+                                        html.Div(className="card chart-card", children=[dcc.Graph(id="trend-line", config={"responsive": True}, style={"height": "430px"})]),
+                                        html.Div(className="card chart-card", children=[dcc.Graph(id="source-pie", config={"responsive": True}, style={"height": "430px"})]),
+                                        html.Div(className="card chart-card", children=[dcc.Graph(id="compare-chart", config={"responsive": True}, style={"height": "460px"})]),
+                                    ],
+                                ),
                             ),
-                            html.Div(
-                                children=[
-                                    html.Label("Категори", className="field-label"),
-                                    dcc.Dropdown(id="main-category", options=[], placeholder="Бүгд", clearable=True),
-                                ]
-                            ),
-                            html.Div(
-                                children=[
-                                    html.Label("Он", className="field-label"),
-                                    dcc.Dropdown(id="main-year", options=[], placeholder="Бүгд", clearable=True),
-                                ]
-                            ),
-                            html.Div(
-                                children=[
-                                    html.Label("Сар", className="field-label"),
-                                    dcc.Dropdown(id="main-month", options=[], placeholder="Бүгд", clearable=True),
-                                ]
+                            dcc.Loading(
+                                type="default",
+                                color=COLORS["primary"],
+                                children=html.Div(
+                                    className="table-grid",
+                                    children=[
+                                        html.Div(
+                                            className="card",
+                                            children=[
+                                                html.H3("Туршлагаар цалингийн хүснэгт", className="section-title"),
+                                                dash_table.DataTable(
+                                                    id="experience-breakdown-table",
+                                                    page_size=8,
+                                                    style_table={"overflowX": "auto", "width": "100%"},
+                                                    style_cell={
+                                                        "textAlign": "left",
+                                                        "padding": "8px",
+                                                        "fontFamily": "Inter, Arial",
+                                                        "fontSize": "12px",
+                                                        "whiteSpace": "normal",
+                                                        "height": "auto",
+                                                        "minWidth": "110px",
+                                                        "maxWidth": "220px",
+                                                    },
+                                                    style_data={"lineHeight": "16px"},
+                                                    style_header={"backgroundColor": "#e2e8f0", "fontWeight": "bold"},
+                                                ),
+                                            ],
+                                        ),
+                                        html.Div(
+                                            className="card",
+                                            children=[
+                                                html.Div(
+                                                    className="section-header",
+                                                    children=[
+                                                        html.H3("Дэлгэрэнгүй хүснэгт", className="section-title"),
+                                                        html.Button("Excel татах", id="download-excel", n_clicks=0, className="btn-primary"),
+                                                    ],
+                                                ),
+                                                html.Div(
+                                                    className="detail-filter-row",
+                                                    children=[
+                                                        dcc.Dropdown(
+                                                            id="detail-title-filter",
+                                                            options=[],
+                                                            value=[],
+                                                            multi=True,
+                                                            placeholder="Хүснэгтийн дотоод шүүлтүүр: Ажлын ангилал",
+                                                            className="detail-title-filter",
+                                                        ),
+                                                        dcc.Input(
+                                                            id="detail-search",
+                                                            type="text",
+                                                            value="",
+                                                            placeholder="Хүснэгт дотор хайх...",
+                                                            className="detail-search-input",
+                                                        ),
+                                                    ],
+                                                ),
+                                                dash_table.DataTable(
+                                                    id="detail-table",
+                                                    page_action="none",
+                                                    style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "600px", "width": "100%"},
+                                                    style_cell={
+                                                        "textAlign": "left",
+                                                        "padding": "8px",
+                                                        "fontFamily": "Inter, Arial",
+                                                        "fontSize": "12px",
+                                                        "whiteSpace": "normal",
+                                                        "height": "auto",
+                                                        "minWidth": "110px",
+                                                        "maxWidth": "240px",
+                                                    },
+                                                    style_data={"lineHeight": "16px"},
+                                                    style_header={"backgroundColor": "#dbeafe", "fontWeight": "bold"},
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
                             ),
                         ],
                     ),
-                ],
-            ),
-            dcc.Loading(
-                type="dot",
-                color=COLORS["primary"],
-                children=html.Div(id="kpi-container", className="kpi-grid"),
-            ),
-            dcc.Loading(
-                type="circle",
-                color=COLORS["primary"],
-                children=html.Div(
-                    className="chart-grid",
-                    children=[
-                        html.Div(className="card chart-card", children=[dcc.Graph(id="salary-bar", config={"responsive": True}, style={"height": "430px"})]),
-                        html.Div(className="card chart-card", children=[dcc.Graph(id="salary-range", config={"responsive": True}, style={"height": "520px"})]),
-                        html.Div(className="card chart-card", children=[dcc.Graph(id="count-bar", config={"responsive": True}, style={"height": "430px"})]),
-                        html.Div(className="card chart-card", children=[dcc.Graph(id="trend-line", config={"responsive": True}, style={"height": "430px"})]),
-                        html.Div(className="card chart-card", children=[dcc.Graph(id="source-pie", config={"responsive": True}, style={"height": "430px"})]),
-                        html.Div(className="card chart-card", children=[dcc.Graph(id="compare-chart", config={"responsive": True}, style={"height": "460px"})]),
-                    ],
-                ),
-            ),
-            dcc.Loading(
-                type="default",
-                color=COLORS["primary"],
-                children=html.Div(
-                    className="table-grid",
-                    children=[
-                        html.Div(
-                            className="card",
-                            children=[
-                                html.H3("Туршлагаар цалингийн хүснэгт", className="section-title"),
-                                dash_table.DataTable(
-                                    id="experience-breakdown-table",
-                                    page_size=8,
-                                    style_table={"overflowX": "auto", "width": "100%"},
-                                    style_cell={
-                                        "textAlign": "left",
-                                        "padding": "8px",
-                                        "fontFamily": "Inter, Arial",
-                                        "fontSize": "12px",
-                                        "whiteSpace": "normal",
-                                        "height": "auto",
-                                        "minWidth": "110px",
-                                        "maxWidth": "220px",
-                                    },
-                                    style_data={"lineHeight": "16px"},
-                                    style_header={"backgroundColor": "#e2e8f0", "fontWeight": "bold"},
-                                ),
-                            ],
-                        ),
-                        html.Div(
-                            className="card",
-                            children=[
-                                html.Div(
-                                    className="section-header",
-                                    children=[
-                                        html.H3("Дэлгэрэнгүй хүснэгт", className="section-title"),
-                                        html.Button("Excel татах", id="download-excel", n_clicks=0, className="btn-primary"),
-                                    ],
-                                ),
-                                html.Div(
-                                    className="detail-filter-row",
-                                    children=[
-                                        dcc.Dropdown(
-                                            id="detail-title-filter",
-                                            options=[],
-                                            value=[],
-                                            multi=True,
-                                            placeholder="Хүснэгтийн дотоод шүүлтүүр: Ажлын ангилал",
-                                            className="detail-title-filter",
-                                        ),
-                                        dcc.Input(
-                                            id="detail-search",
-                                            type="text",
-                                            value="",
-                                            placeholder="Хүснэгт дотор хайх...",
-                                            className="detail-search-input",
-                                        ),
-                                    ],
-                                ),
-                                dash_table.DataTable(
-                                    id="detail-table",
-                                    page_size=10,
-                                    style_table={"overflowX": "auto", "width": "100%"},
-                                    style_cell={
-                                        "textAlign": "left",
-                                        "padding": "8px",
-                                        "fontFamily": "Inter, Arial",
-                                        "fontSize": "12px",
-                                        "whiteSpace": "normal",
-                                        "height": "auto",
-                                        "minWidth": "110px",
-                                        "maxWidth": "240px",
-                                    },
-                                    style_data={"lineHeight": "16px"},
-                                    style_header={"backgroundColor": "#dbeafe", "fontWeight": "bold"},
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
-            ),
-            html.Button("💬", id="chat-toggle", className="chat-widget-toggle", n_clicks=0),
-            html.Div(
-                id="chat-panel",
-                className="chat-widget-panel",
-                style={"display": "none"},
-                children=[
-                    html.Div("AI Chat Assistant", className="chat-title"),
-                    html.Div(id="chat-output", className="chat-output", children=_render_chat_messages([{"role": "assistant", "content": "Сайн байна уу 👋"}])),
-                    dcc.Input(id="chat-input", className="chat-input-line", type="text", placeholder="Асуултаа бичнэ үү...", debounce=False),
-                    html.Button("Илгээх", id="chat-send", className="btn-primary chat-send", n_clicks=0),
+                    # ── RIGHT: chatbot side panel (hidden by default) ──
+                    html.Div(
+                        id="chat-panel",
+                        className="chat-side-panel",
+                        children=[
+                            html.Div(
+                                className="chat-panel-header",
+                                children=[
+                                    html.Div("AI Chat Assistant", className="chat-title"),
+                                    html.Button("✕", id="chat-close", className="chat-close-btn", n_clicks=0),
+                                ],
+                            ),
+                            html.Div(id="chat-output", className="chat-output", children=_render_chat_messages([{"role": "assistant", "content": "Сайн байна уу 👋 Танд цалин, албан тушаалын түвшин, салбарын чиг хандлага болон ажлын зах зээлийн мэдээлэл өгч чадна."}])),
+                            html.Div(
+                                className="chat-input-row",
+                                children=[
+                                    dcc.Input(id="chat-input", className="chat-input-line", type="text", placeholder="Асуултаа бичнэ үү...", debounce=False),
+                                    html.Button("Илгээх", id="chat-send", className="btn-primary chat-send", n_clicks=0),
+                                ],
+                            ),
+                        ],
+                    ),
                 ],
             ),
         ],
@@ -964,24 +1121,27 @@ def _jobs_list_layout() -> html.Div:
                                     "wordBreak": "break-word",
                                     "height": "auto",
                                 },
-                                style_data_conditional=[
-                                    {
-                                        "if": {"column_id": "salary_min"},
-                                        "minWidth": "130px",
-                                        "width": "130px",
-                                        "maxWidth": "130px",
-                                        "whiteSpace": "nowrap",
-                                        "textAlign": "right",
-                                    },
-                                    {
-                                        "if": {"column_id": "salary_max"},
-                                        "minWidth": "130px",
-                                        "width": "130px",
-                                        "maxWidth": "130px",
-                                        "whiteSpace": "nowrap",
-                                        "textAlign": "right",
-                                    },
-                                ],
+                                style_cell_conditional=cast(
+                                    Any,
+                                    [
+                                        {
+                                            "if": {"column_id": "salary_min"},
+                                            "minWidth": "130px",
+                                            "width": "130px",
+                                            "maxWidth": "130px",
+                                            "whiteSpace": "nowrap",
+                                            "textAlign": "right",
+                                        },
+                                        {
+                                            "if": {"column_id": "salary_max"},
+                                            "minWidth": "130px",
+                                            "width": "130px",
+                                            "maxWidth": "130px",
+                                            "whiteSpace": "nowrap",
+                                            "textAlign": "right",
+                                        },
+                                    ],
+                                ),
                                 style_header={
                                     "backgroundColor": "#dbeafe",
                                     "fontWeight": "bold",
@@ -1024,26 +1184,26 @@ def render_page(pathname: Optional[str]):
     return _dashboard_page_layout()
 
 
-@callback(Output("chat-open", "data"), Input("chat-toggle", "n_clicks"), State("chat-open", "data"), prevent_initial_call=True)
-def toggle_chat(n_clicks: int, is_open: Optional[bool]):
+@callback(Output("chat-open", "data"), Input("chat-toggle", "n_clicks"), Input("chat-close", "n_clicks"), State("chat-open", "data"), prevent_initial_call=True)
+def toggle_chat(toggle_clicks: int, close_clicks: int, is_open: Optional[bool]):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return False
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    if trigger_id == "chat-close":
+        return False
     return not bool(is_open)
 
 
-@callback(Output("chat-panel", "style"), Input("chat-open", "data"))
+@callback(
+    Output("chat-panel", "className"),
+    Output("dashboard-main", "className"),
+    Input("chat-open", "data"),
+)
 def set_chat_visibility(is_open: Optional[bool]):
-    base = {
-        "position": "fixed",
-        "right": "24px",
-        "bottom": "88px",
-        "width": "380px",
-        "maxWidth": "calc(100vw - 24px)",
-        "display": "none",
-        "zIndex": 1200,
-    }
     if is_open:
-        base["display"] = "flex"
-        base["flexDirection"] = "column"
-    return base
+        return "chat-side-panel chat-side-panel--open", "dashboard-main dashboard-main--shrink"
+    return "chat-side-panel", "dashboard-main"
 
 
 @callback(
@@ -1141,6 +1301,12 @@ def update_jobs_list(
     selected_company: Optional[str],
 ):
     filter_options = _load_jobs_filter_options(refresh=(n_intervals == 0))
+
+    source = _normalize_optional_filter(source)
+    selected_function = _normalize_optional_filter(selected_function)
+    selected_industry = _normalize_optional_filter(selected_industry)
+    selected_level = _normalize_optional_filter(selected_level)
+    selected_company = _normalize_optional_filter(selected_company)
 
     df = _load_jobs_raw(
         limit=JOBS_LIST_LIMIT,
@@ -1247,29 +1413,30 @@ def update_jobs_list(
     Input("jobs-table-raw", "data"),
 )
 def update_jobs_local_filter_options(raw_rows: Optional[List[Dict[str, object]]]):
-    rows = raw_rows or []
-    if not rows:
+    if not raw_rows:
         return [], []
 
-    def _pick_key(candidates: List[str]) -> Optional[str]:
-        keys = set()
-        for row in rows:
-            keys.update(row.keys())
-        for key in candidates:
-            if key in keys:
-                return key
-        return None
+    df = pd.DataFrame(raw_rows)
+    if df.empty:
+        return [], []
 
-    source_key = _pick_key(["source_job", "source", "platform", "site_name", "website"])
-    level_key = _pick_key(["job_level", "Түвшин"])
+    source_col = _first_existing_col(df, ["source_job", "source", "platform", "site_name", "website", "Эх сурвалж"])
+    level_col = _first_existing_col(df, ["job_level", "level", "Түвшин"])
 
-    def _options_for(key: Optional[str]) -> List[Dict[str, str]]:
-        if not key:
+    def _options_for(column_name: Optional[str]) -> List[Dict[str, str]]:
+        if not column_name or column_name not in df.columns:
             return []
-        values = sorted({str(row.get(key, "")).strip() for row in rows if str(row.get(key, "")).strip()})
-        return [{"label": v, "value": v} for v in values]
+        values: List[str] = []
+        for value in df[column_name].dropna().tolist():
+            if _is_all_like(value):
+                continue
+            cleaned = str(value).strip()
+            if cleaned:
+                values.append(cleaned)
+        unique_sorted = sorted(set(values), key=lambda item: _norm_text(item))
+        return [{"label": value, "value": value} for value in unique_sorted]
 
-    return _options_for(source_key), _options_for(level_key)
+    return _options_for(source_col), _options_for(level_col)
 
 
 @callback(
@@ -1283,38 +1450,80 @@ def update_jobs_local_filter_options(raw_rows: Optional[List[Dict[str, object]]]
 )
 def filter_jobs_table_local(
     local_search: Optional[str],
-    local_source_values: Optional[List[str]],
-    local_level_values: Optional[List[str]],
+    local_source_values: object,
+    local_level_values: object,
     raw_rows: Optional[List[Dict[str, object]]],
 ):
-    rows = raw_rows or []
+    if not raw_rows:
+        return [], "Нийт мөр: 0"
 
-    def _pick_key(candidates: List[str]) -> Optional[str]:
-        keys = set()
-        for row in rows:
-            keys.update(row.keys())
-        for key in candidates:
-            if key in keys:
-                return key
-        return None
+    df = pd.DataFrame(raw_rows)
+    if df.empty:
+        return [], "Нийт мөр: 0"
 
-    source_key = _pick_key(["source_job", "source", "platform", "site_name", "website"])
-    level_key = _pick_key(["job_level", "Түвшин"])
+    source_col = _first_existing_col(df, ["source_job", "source", "platform", "site_name", "website", "Эх сурвалж"])
+    level_col = _first_existing_col(df, ["job_level", "level", "Түвшин"])
 
-    if local_source_values and source_key:
-        selected = {str(v) for v in local_source_values if str(v).strip()}
-        rows = [row for row in rows if str(row.get(source_key, "")).strip() in selected]
+    selected_sources = _safe_selected_values(local_source_values)
+    selected_levels = _safe_selected_values(local_level_values)
 
-    if local_level_values and level_key:
-        selected = {str(v) for v in local_level_values if str(v).strip()}
-        rows = [row for row in rows if str(row.get(level_key, "")).strip() in selected]
+    if source_col and selected_sources:
+        source_norm = {_norm_text(value) for value in selected_sources}
+        df = df[df[source_col].astype(str).map(_norm_text).isin(source_norm)]
 
-    if not local_search or not local_search.strip():
-        return rows, f"Нийт мөр: {len(rows):,}"
+    if level_col and selected_levels:
+        level_norm = {_norm_text(value) for value in selected_levels}
+        df = df[df[level_col].astype(str).map(_norm_text).isin(level_norm)]
 
-    q = local_search.strip().lower()
-    filtered = [row for row in rows if q in " ".join(str(v) for v in row.values()).lower()]
-    return filtered, f"Нийт мөр: {len(filtered):,}"
+    search_text = _norm_text(local_search)
+    if search_text:
+        tokens = _expand_search_tokens(search_text)
+        alias_phrases = _expand_search_alias_phrases(search_text)
+        preferred_cols = [
+            "title",
+            "job_title",
+            "company_name",
+            "job_function",
+            "job_industry",
+            "job_level",
+            "source_job",
+            "source",
+            "platform",
+            "description",
+            "requirements",
+            "requirement_reasoning",
+            "benefits",
+            "benefits_reasoning",
+            "Тайлбар",
+            "Албан тушаал",
+            "Компани",
+            "Салбар",
+            "Түвшин",
+            "Эх сурвалж",
+        ]
+        search_cols = [column for column in preferred_cols if column in df.columns] or list(df.columns)
+        normalized_cols = {column: df[column].astype(str).map(_norm_text) for column in search_cols}
+
+        base_mask = pd.Series(True, index=df.index)
+        if tokens:
+            for token in tokens:
+                any_col_match = pd.Series(False, index=df.index)
+                for column in search_cols:
+                    any_col_match = any_col_match | normalized_cols[column].str.contains(token, regex=False, na=False)
+                base_mask = base_mask & any_col_match
+
+        alias_mask = pd.Series(False, index=df.index)
+        if alias_phrases:
+            for alias in alias_phrases:
+                alias_match = pd.Series(False, index=df.index)
+                for column in search_cols:
+                    alias_match = alias_match | normalized_cols[column].str.contains(alias, regex=False, na=False)
+                alias_mask = alias_mask | alias_match
+
+        df = df[base_mask | alias_mask]
+
+    filtered_rows = df.to_dict("records")
+    return filtered_rows, f"Нийт мөр: {len(filtered_rows):,}"
 
 
 @callback(
@@ -1333,12 +1542,13 @@ def download_jobs_excel(n_clicks: int, table_data: Optional[List[Dict[str, objec
     }
     excel_bytes = _post_api_bytes("download/jobs-report", payload=payload)
     if excel_bytes:
-        return dcc.send_bytes(excel_bytes, "jobs_list.xlsx")
+        return _send_bytes_download(excel_bytes, "jobs_list.xlsx")
 
     return dash.no_update
 
 
 @callback(
+    # --- filter options & values ---
     Output("main-industry", "options"),
     Output("main-function", "options"),
     Output("main-level", "options"),
@@ -1351,6 +1561,21 @@ def download_jobs_excel(n_clicks: int, table_data: Optional[List[Dict[str, objec
     Output("main-category", "value"),
     Output("main-year", "value"),
     Output("main-month", "value"),
+    # --- dashboard charts & tables ---
+    Output("kpi-container", "children"),
+    Output("salary-bar", "figure"),
+    Output("salary-range", "figure"),
+    Output("count-bar", "figure"),
+    Output("trend-line", "figure"),
+    Output("source-pie", "figure"),
+    Output("compare-chart", "figure"),
+    Output("experience-breakdown-table", "data"),
+    Output("experience-breakdown-table", "columns"),
+    Output("detail-table", "data"),
+    Output("detail-table", "columns"),
+    Output("detail-table-raw", "data"),
+    Output("detail-title-filter", "options"),
+    Output("detail-title-filter", "value"),
     Input("main-industry", "value"),
     Input("main-function", "value"),
     Input("main-level", "value"),
@@ -1359,7 +1584,7 @@ def download_jobs_excel(n_clicks: int, table_data: Optional[List[Dict[str, objec
     Input("main-month", "value"),
     Input("interval-component", "n_intervals"),
 )
-def update_main_filter_options(
+def update_dashboard(
     selected_industry: Optional[str],
     selected_function: Optional[str],
     selected_level: Optional[str],
@@ -1368,20 +1593,23 @@ def update_main_filter_options(
     selected_month: Optional[str],
     n_intervals: int,
 ):
+    # ── normalise raw filter values ──
+    selected_industry = _normalize_optional_filter(selected_industry)
+    selected_function = _normalize_optional_filter(selected_function)
+    selected_level = _normalize_optional_filter(selected_level)
+    selected_category = _normalize_optional_filter(selected_category)
+    selected_year = _normalize_optional_filter(selected_year)
+    selected_month = _normalize_optional_filter(selected_month)
+
     df = _exclude_all_titles(_load_data_main())
+
+    # ── empty-data early return (filter defaults + empty charts) ──
+    _empty_filters = ([], [], [], [], [], [], None, None, None, None, None, None)
     if df.empty:
-        return [], [], [], [], [], [], None, None, None, None, None, None
+        empty = _empty_figure("Өгөгдөл олдсонгүй")
+        return (*_empty_filters, _build_kpi_cards(df), empty, empty, empty, empty, empty, empty, [], [], [], [], [], [], [])
 
-    should_default_latest_period = (
-        int(n_intervals or 0) == 0
-        and not (selected_industry and str(selected_industry).strip())
-        and not (selected_function and str(selected_function).strip())
-        and not (selected_level and str(selected_level).strip())
-        and not (selected_category and str(selected_category).strip())
-        and not (selected_year and str(selected_year).strip())
-        and not (selected_month and str(selected_month).strip())
-    )
-
+    # ── cascading filter-option logic (single data load) ──
     industry_values = _distinct_non_empty_values(df, "industry")
     industry_options = [{"label": v, "value": v} for v in industry_values]
     if selected_industry and selected_industry not in industry_values:
@@ -1424,10 +1652,6 @@ def update_main_filter_options(
     year_series = pd.to_numeric(df_category["year"], errors="coerce") if "year" in df_category.columns else pd.Series(dtype=float)
     year_values = sorted({int(v) for v in year_series.dropna().tolist()}, reverse=True)
     year_options = [{"label": str(v), "value": str(v)} for v in year_values]
-
-    if should_default_latest_period and year_values:
-        selected_year = str(year_values[0])
-
     if selected_year and selected_year not in {str(v) for v in year_values}:
         selected_year = None
 
@@ -1442,14 +1666,10 @@ def update_main_filter_options(
     month_series = pd.to_numeric(df_year["month"], errors="coerce") if "month" in df_year.columns else pd.Series(dtype=float)
     month_values = sorted({int(v) for v in month_series.dropna().tolist()})
     month_options = [{"label": f"{v:02d}", "value": str(v)} for v in month_values]
-
-    if should_default_latest_period and month_values:
-        selected_month = str(month_values[-1])
-
     if selected_month and selected_month not in {str(v) for v in month_values}:
         selected_month = None
 
-    return (
+    filter_results = (
         industry_options,
         function_options,
         level_options,
@@ -1464,42 +1684,9 @@ def update_main_filter_options(
         selected_month,
     )
 
-
-@callback(
-    Output("kpi-container", "children"),
-    Output("salary-bar", "figure"),
-    Output("salary-range", "figure"),
-    Output("count-bar", "figure"),
-    Output("trend-line", "figure"),
-    Output("source-pie", "figure"),
-    Output("compare-chart", "figure"),
-    Output("experience-breakdown-table", "data"),
-    Output("experience-breakdown-table", "columns"),
-    Output("detail-table", "data"),
-    Output("detail-table", "columns"),
-    Output("detail-table-raw", "data"),
-    Output("detail-title-filter", "options"),
-    Output("detail-title-filter", "value"),
-    Input("main-industry", "value"),
-    Input("main-function", "value"),
-    Input("main-level", "value"),
-    Input("main-category", "value"),
-    Input("main-year", "value"),
-    Input("main-month", "value"),
-    Input("interval-component", "n_intervals"),
-)
-def update_dashboard(
-    selected_industry: Optional[str],
-    selected_function: Optional[str],
-    selected_level: Optional[str],
-    selected_category: Optional[str],
-    selected_year: Optional[str],
-    selected_month: Optional[str],
-    n_intervals: int,
-):
-    df_all = _exclude_all_titles(_load_data_main())
+    # ── apply all validated filters for chart data ──
     df_all = _apply_main_dimension_filters(
-        df_all,
+        df,
         selected_function=selected_function,
         selected_industry=selected_industry,
         selected_level=selected_level,
@@ -1509,7 +1696,7 @@ def update_dashboard(
     )
     if df_all.empty:
         empty = _empty_figure("Өгөгдөл олдсонгүй")
-        return _build_kpi_cards(df_all), empty, empty, empty, empty, empty, empty, [], [], [], [], [], [], []
+        return (*filter_results, _build_kpi_cards(df_all), empty, empty, empty, empty, empty, empty, [], [], [], [], [], [], [])
 
     df_latest = _latest_per_title(df_all)
     display_label = "Ажлын ангилал"
@@ -1517,13 +1704,64 @@ def update_dashboard(
     df_selected = df_all.copy()
     df_selected_latest = df_latest.copy()
 
+    # ── Build detail table from df_latest (all filtered titles, not 3-month restricted) ──
+    _detail_df = df_latest.copy()
+    if "experience_salary_breakdown" in _detail_df.columns:
+        _detail_df["experience_salary_breakdown"] = _detail_df["experience_salary_breakdown"].apply(_format_experience_breakdown_for_table)
+    _detail_df = _detail_df.rename(
+        columns={
+            "title": "Ажлын ангилал",
+            "min_salary": "Доод цалин",
+            "max_salary": "Дээд цалин",
+            "average_salary": "Дундаж цалин",
+            "job_count": "Зарын тоо",
+            "zangia_count": "Zangia",
+            "lambda_count": "Lambda",
+            "experience_salary_breakdown": "Туршлагаар цалин",
+        }
+    )
+    _wanted = ["Ажлын ангилал", "Доод цалин", "Дээд цалин", "Дундаж цалин", "Зарын тоо", "Zangia", "Lambda"]
+    _detail_columns = [{"name": c, "id": c} for c in _wanted if c in _detail_df.columns]
+    for _col in ["Доод цалин", "Дээд цалин", "Дундаж цалин", "Зарын тоо", "Zangia", "Lambda"]:
+        if _col in _detail_df.columns:
+            _detail_df[_col] = _detail_df[_col].apply(_format_grouped_number)
+    _detail_data = _detail_df[[c["id"] for c in _detail_columns]].to_dict("records")
+    _detail_title_options: List[Dict[str, str]] = []
+    if "Ажлын ангилал" in _detail_df.columns:
+        _detail_title_options = [
+            {"label": str(t), "value": str(t)}
+            for t in sorted(_detail_df["Ажлын ангилал"].dropna().astype(str).unique().tolist())
+        ]
+
+    # Filter to the latest 3 months of data for all charts except trend
+    if "year" in df_selected_latest.columns and "month" in df_selected_latest.columns:
+        _tmp = df_selected_latest.copy()
+        _tmp["_y"] = pd.to_numeric(_tmp["year"], errors="coerce")
+        _tmp["_m"] = pd.to_numeric(_tmp["month"], errors="coerce")
+        _valid = _tmp.dropna(subset=["_y", "_m"])
+        if not _valid.empty:
+            _valid["_period"] = _valid["_y"] * 100 + _valid["_m"]
+            latest_periods = sorted(_valid["_period"].unique(), reverse=True)[:3]
+            _tmp_all = df_selected_latest.copy()
+            _tmp_all["_period"] = (
+                pd.to_numeric(_tmp_all["year"], errors="coerce") * 100
+                + pd.to_numeric(_tmp_all["month"], errors="coerce")
+            )
+            df_selected_latest = _tmp_all[_tmp_all["_period"].isin(latest_periods)].drop(columns=["_period"]).copy()
+
     kpis = _build_kpi_cards(df_selected_latest)
     if df_selected_latest.empty:
         empty = _empty_figure("Өгөгдөл олдсонгүй")
-        return kpis, empty, empty, empty, empty, empty, empty, [], [], [], [], [], [], []
+        return (*filter_results, kpis, empty, empty, empty, empty, empty, empty, [], [], _detail_data, _detail_columns, _detail_data, _detail_title_options, [])
 
-    bar_df = df_selected_latest.groupby("title", as_index=False)["average_salary"].mean()
+    bar_df = df_selected_latest.groupby("title", as_index=False).agg(
+        average_salary=("average_salary", "mean")
+    )
     bar_df["title_short"] = bar_df["title"].apply(_shorten_label)
+    bar_df = bar_df.groupby("title_short", as_index=False).agg(
+        average_salary=("average_salary", "mean")
+    )
+    bar_df = bar_df.sort_values(by="average_salary", ascending=False).head(5)
     bar_fig = px.bar(
         bar_df,
         y="title_short",
@@ -1532,7 +1770,6 @@ def update_dashboard(
         title=f"Сарын дундаж цалин ({display_label})",
         labels={"title_short": display_label, "average_salary": "Дундаж цалин (₮)"},
         color_discrete_sequence=[COLORS["primary"]],
-        hover_data={"title": True, "title_short": False, "average_salary": True},
     )
     bar_fig.update_layout(height=420, yaxis={"automargin": True, "categoryorder": "total ascending"})
     _apply_chart_style(bar_fig)
@@ -1542,8 +1779,13 @@ def update_dashboard(
         max_salary=("max_salary", "max"),
         average_salary=("average_salary", "mean"),
     )
-    range_df = range_df.sort_values("average_salary", ascending=False)
     range_df["title_short"] = range_df["title"].apply(_shorten_label)
+    range_df = range_df.groupby("title_short", as_index=False).agg(
+        min_salary=("min_salary", "min"),
+        max_salary=("max_salary", "max"),
+        average_salary=("average_salary", "mean"),
+    )
+    range_df = range_df.sort_values("average_salary", ascending=False).head(5)
     range_fig = go.Figure()
 
     line_x: List[float | None] = []
@@ -1570,8 +1812,7 @@ def update_dashboard(
             mode="markers",
             name="Доод",
             marker={"size": 9, "color": "#5b8a3c", "symbol": "circle"},
-            customdata=range_df[["title"]],
-            hovertemplate="%{customdata[0]}<br>Доод: %{x:,.0f} ₮<extra></extra>",
+            hovertemplate="%{y}<br>Доод: %{x:,.0f} ₮<extra></extra>",
         )
     )
     range_fig.add_trace(
@@ -1581,8 +1822,7 @@ def update_dashboard(
             mode="markers",
             name="Дундаж",
             marker={"size": 10, "color": "#3b82f6", "symbol": "diamond"},
-            customdata=range_df[["title"]],
-            hovertemplate="%{customdata[0]}<br>Дундаж: %{x:,.0f} ₮<extra></extra>",
+            hovertemplate="%{y}<br>Дундаж: %{x:,.0f} ₮<extra></extra>",
         )
     )
     range_fig.add_trace(
@@ -1592,8 +1832,7 @@ def update_dashboard(
             mode="markers",
             name="Дээд",
             marker={"size": 9, "color": "#dc2626", "symbol": "circle"},
-            customdata=range_df[["title"]],
-            hovertemplate="%{customdata[0]}<br>Дээд: %{x:,.0f} ₮<extra></extra>",
+            hovertemplate="%{y}<br>Дээд: %{x:,.0f} ₮<extra></extra>",
         )
     )
 
@@ -1607,8 +1846,10 @@ def update_dashboard(
     _apply_chart_style(range_fig)
 
     if "job_count" in df_selected_latest.columns:
-        count_df = df_selected_latest.groupby("title", as_index=False)["job_count"].sum()
+        count_df = df_selected_latest.groupby("title", as_index=False).agg(job_count=("job_count", "sum"))
         count_df["title_short"] = count_df["title"].apply(_shorten_label)
+        count_df = count_df.groupby("title_short", as_index=False).agg(job_count=("job_count", "sum"))
+        count_df = count_df.sort_values(by="job_count", ascending=False).head(5)
         count_fig = px.bar(
             count_df,
             y="title_short",
@@ -1617,7 +1858,6 @@ def update_dashboard(
             title=f"Ажлын байрны тоо ({display_label})",
             labels={"title_short": display_label, "job_count": "Ажлын байр"},
             color_discrete_sequence=[COLORS["warning"]],
-            hover_data={"title": True, "title_short": False, "job_count": True},
         )
         count_fig.update_layout(height=420, yaxis={"automargin": True, "categoryorder": "total ascending"})
         _apply_chart_style(count_fig)
@@ -1657,16 +1897,19 @@ def update_dashboard(
     compare_df = (
         df_selected_latest.groupby("title", as_index=False)
         .agg(min_salary=("min_salary", "min"), average_salary=("average_salary", "mean"), max_salary=("max_salary", "max"))
+    )
+    compare_df["title_short"] = compare_df["title"].apply(_shorten_label)
+    compare_df = (
+        compare_df.groupby("title_short", as_index=False)
+        .agg(min_salary=("min_salary", "min"), average_salary=("average_salary", "mean"), max_salary=("max_salary", "max"))
         .sort_values("average_salary", ascending=False)
-        .head(12)
+        .head(5)
     )
     if compare_df.empty:
         compare_fig = _empty_figure("Харьцуулах өгөгдөл алга")
     else:
-        compare_df["title_short"] = compare_df["title"].apply(_shorten_label)
-        compare_long = compare_df.melt(id_vars=["title"], value_vars=["min_salary", "average_salary", "max_salary"], var_name="metric", value_name="salary")
+        compare_long = compare_df.melt(id_vars=["title_short"], value_vars=["min_salary", "average_salary", "max_salary"], var_name="metric", value_name="salary")
         compare_long["metric"] = compare_long["metric"].map({"min_salary": "Доод", "average_salary": "Дундаж", "max_salary": "Дээд"})
-        compare_long = compare_long.merge(compare_df[["title", "title_short"]], on="title", how="left")
         compare_fig = px.bar(
             compare_long,
             x="title_short",
@@ -1676,47 +1919,15 @@ def update_dashboard(
             title=f"Сонгосон ангиллуудын цалингийн харьцуулалт ({display_label})",
             labels={"title_short": display_label, "salary": "Цалин (₮)", "metric": "Үзүүлэлт"},
             color_discrete_map={"Доод": "#93c5fd", "Дундаж": COLORS["primary"], "Дээд": "#1d4ed8"},
-            custom_data=["title"],
         )
-        compare_fig.update_traces(hovertemplate="%{customdata[0]}<br>%{fullData.name}: %{y:,.0f} ₮<extra></extra>")
+        compare_fig.update_traces(hovertemplate="%{fullData.name}: %{y:,.0f} ₮<extra></extra>")
         compare_fig.update_layout(xaxis_tickangle=-20)
         _apply_chart_style(compare_fig)
 
     experience_data, experience_columns = _build_experience_breakdown_table(df_selected_latest, is_all_selected=is_all_selected)
 
-    table_df = df_selected_latest.copy()
-    if "experience_salary_breakdown" in table_df.columns:
-        table_df["experience_salary_breakdown"] = table_df["experience_salary_breakdown"].apply(_format_experience_breakdown_for_table)
-
-    table_df = table_df.rename(
-        columns={
-            "title": "Ажлын ангилал",
-            "min_salary": "Доод цалин",
-            "max_salary": "Дээд цалин",
-            "average_salary": "Дундаж цалин",
-            "job_count": "Зарын тоо",
-            "zangia_count": "Zangia",
-            "lambda_count": "Lambda",
-            "experience_salary_breakdown": "Туршлагаар цалин",
-        }
-    )
-    wanted = ["Ажлын ангилал", "Доод цалин", "Дээд цалин", "Дундаж цалин", "Зарын тоо", "Zangia", "Lambda"]
-    table_columns = [{"name": c, "id": c} for c in wanted if c in table_df.columns]
-
-    for col in ["Доод цалин", "Дээд цалин", "Дундаж цалин", "Зарын тоо", "Zangia", "Lambda"]:
-        if col in table_df.columns:
-            table_df[col] = table_df[col].apply(_format_grouped_number)
-
-    table_data = table_df[[c["id"] for c in table_columns]].to_dict("records")
-
-    title_options: List[Dict[str, str]] = []
-    if "Ажлын ангилал" in table_df.columns:
-        title_options = [
-            {"label": str(t), "value": str(t)}
-            for t in sorted(table_df["Ажлын ангилал"].dropna().astype(str).unique().tolist())
-        ]
-
     return (
+        *filter_results,
         kpis,
         bar_fig,
         range_fig,
@@ -1726,10 +1937,10 @@ def update_dashboard(
         compare_fig,
         experience_data,
         experience_columns,
-        table_data,
-        table_columns,
-        table_data,
-        title_options,
+        _detail_data,
+        _detail_columns,
+        _detail_data,
+        _detail_title_options,
         [],
     )
 
@@ -1749,15 +1960,17 @@ def filter_detail_table_rows(
     rows = raw_data or []
 
     if selected_titles:
-        selected = {str(v) for v in selected_titles if v}
-        rows = [row for row in rows if str(row.get("Ажлын ангилал", "")) in selected]
+        selected = {str(v) for v in selected_titles if v and not _is_all_like(v)}
+        if selected:
+            rows = [row for row in rows if str(row.get("Ажлын ангилал", "")) in selected]
 
-    if search_text and search_text.strip():
-        q = search_text.strip().lower()
+    search_normalized = _norm_text(search_text)
+    if search_normalized:
+        tokens = [t for t in search_normalized.split(" ") if t]
         filtered: List[Dict[str, object]] = []
         for row in rows:
-            text = " ".join(str(v) for v in row.values()).lower()
-            if q in text:
+            row_text = _norm_text(" ".join(str(v) for v in row.values()))
+            if all(token in row_text for token in tokens):
                 filtered.append(row)
         rows = filtered
 
@@ -1780,152 +1993,9 @@ def download_excel(n_clicks: int, table_data: List[Dict[str, object]]):
     }
     excel_bytes = _post_api_bytes("download/dashboard-report", payload=payload)
     if excel_bytes:
-        return dcc.send_bytes(excel_bytes, "salary_report.xlsx")
+        return _send_bytes_download(excel_bytes, "salary_report.xlsx")
 
     return dash.no_update
-
-
-# Backward-compatibility callbacks for stale browser sessions
-@callback(
-    Output("session-store", "data"),
-    Output("chat-session", "value"),
-    Input("interval-component", "n_intervals"),
-    State("session-store", "data"),
-    prevent_initial_call=False,
-)
-def legacy_ensure_session_id(n_intervals: int, session_id: Optional[str]):
-    if session_id:
-        return session_id, session_id
-    new_id = f"session-{uuid.uuid4().hex[:12]}"
-    return new_id, new_id
-
-
-@callback(
-    Output("kpi-container", "children", allow_duplicate=True),
-    Output("salary-bar", "figure", allow_duplicate=True),
-    Output("salary-range", "figure", allow_duplicate=True),
-    Output("count-bar", "figure", allow_duplicate=True),
-    Output("trend-line", "figure", allow_duplicate=True),
-    Output("source-pie", "figure", allow_duplicate=True),
-    Output("avg-scatter", "figure", allow_duplicate=True),
-    Output("detail-table", "data", allow_duplicate=True),
-    Output("detail-table", "columns", allow_duplicate=True),
-    Input("main-industry", "value"),
-    Input("main-function", "value"),
-    Input("main-level", "value"),
-    Input("main-category", "value"),
-    Input("main-year", "value"),
-    Input("main-month", "value"),
-    Input("interval-component", "n_intervals"),
-    prevent_initial_call=True,
-)
-def legacy_update_dashboard(
-    selected_industry: Optional[str],
-    selected_function: Optional[str],
-    selected_level: Optional[str],
-    selected_category: Optional[str],
-    selected_year: Optional[str],
-    selected_month: Optional[str],
-    n_intervals: int,
-):
-    (
-        kpis,
-        bar_fig,
-        range_fig,
-        count_fig,
-        trend_fig,
-        source_fig,
-        compare_fig,
-        _experience_data,
-        _experience_columns,
-        table_data,
-        table_columns,
-        _table_raw,
-        _title_options,
-        _title_value,
-    ) = update_dashboard(
-        selected_industry,
-        selected_function,
-        selected_level,
-        selected_category,
-        selected_year,
-        selected_month,
-        n_intervals,
-    )
-
-    return (
-        kpis,
-        bar_fig,
-        range_fig,
-        count_fig,
-        trend_fig,
-        source_fig,
-        compare_fig,
-        table_data,
-        table_columns,
-    )
-
-
-@callback(
-    Output("jobs-source", "options", allow_duplicate=True),
-    Output("jobs-function", "options", allow_duplicate=True),
-    Output("jobs-industry", "options", allow_duplicate=True),
-    Output("jobs-level", "options", allow_duplicate=True),
-    Output("jobs-company", "options", allow_duplicate=True),
-    Output("jobs-count", "children", allow_duplicate=True),
-    Output("jobs-table", "data", allow_duplicate=True),
-    Output("jobs-table", "columns", allow_duplicate=True),
-    Input("jobs-api-search-btn", "n_clicks"),
-    Input("jobs-interval", "n_intervals"),
-    State("jobs-api-search", "value"),
-    State("jobs-source", "value"),
-    State("jobs-function", "value"),
-    State("jobs-industry", "value"),
-    State("jobs-level", "value"),
-    State("jobs-company", "value"),
-    prevent_initial_call=True,
-)
-def legacy_update_jobs_list(
-    n_clicks: int,
-    n_intervals: int,
-    api_search_text: Optional[str],
-    source: Optional[str],
-    selected_function: Optional[str],
-    selected_industry: Optional[str],
-    selected_level: Optional[str],
-    selected_company: Optional[str],
-):
-    (
-        source_options,
-        function_options,
-        industry_options,
-        level_options,
-        company_options,
-        count_text,
-        table_data,
-        table_columns,
-        _table_raw,
-    ) = update_jobs_list(
-        n_clicks,
-        n_intervals,
-        api_search_text,
-        source,
-        selected_function,
-        selected_industry,
-        selected_level,
-        selected_company,
-    )
-
-    return (
-        source_options,
-        function_options,
-        industry_options,
-        level_options,
-        company_options,
-        count_text,
-        table_data,
-        table_columns,
-    )
 
 
 if __name__ == "__main__":

@@ -1,12 +1,18 @@
+from __future__ import annotations
+
+import logging
 from abc import ABC, abstractmethod
+from typing import Any, List, Optional, Union
+
 from pydantic import BaseModel
-from typing import Any, List, Union
 from sqlalchemy.orm import Session
 
 from schemas.database.zangia_jobs import ZangiaJobTable
 from schemas.database.lambda_jobs import LambdaJobTable, LambdaJobTable_before
 from schemas.database.base_classifier_db import JobClassificationOutputTable
 from schemas.database.salary_calculation_db import SalaryCalculationOutputTable
+
+logger = logging.getLogger(__name__)
 
 class DatabaseRepository(ABC):
     def __init__(self, db_session: Session):
@@ -54,22 +60,27 @@ class ZangiaJobRepository(DatabaseRepository):
     
     def batch_create(self, objs_in: List[BaseModel], chunk_size: int = 100) -> List[ZangiaJobTable]:
         """Insert records in chunks to avoid connection timeouts."""
-        all_db_objs = []
-        
+        all_db_objs: List[ZangiaJobTable] = []
+
         for i in range(0, len(objs_in), chunk_size):
             chunk = objs_in[i:i + chunk_size]
-            db_objs = []
-            for obj_in in chunk:
-                data = obj_in.model_dump(exclude_none=True)
-                if not data.get("id"):
-                    raise ValueError("ZangiaJob requires non-empty `id` (mapped from API `code`).")
-                db_obj = ZangiaJobTable(**data)
-                self.db_session.add(db_obj)
-                db_objs.append(db_obj)
-            self.db_session.commit()
-            all_db_objs.extend(db_objs)
-            print(f"Inserted chunk {i // chunk_size + 1} ({len(chunk)} records)")
-        
+            db_objs: List[ZangiaJobTable] = []
+            try:
+                for obj_in in chunk:
+                    data = obj_in.model_dump(exclude_none=True)
+                    if not data.get("id"):
+                        raise ValueError("ZangiaJob requires non-empty `id` (mapped from API `code`).")
+                    db_obj = ZangiaJobTable(**data)
+                    self.db_session.add(db_obj)
+                    db_objs.append(db_obj)
+                self.db_session.commit()
+                all_db_objs.extend(db_objs)
+                logger.info("Zangia chunk %d: inserted %d records", i // chunk_size + 1, len(db_objs))
+            except Exception:
+                self.db_session.rollback()
+                logger.exception("Zangia chunk %d failed – rolled back", i // chunk_size + 1)
+                raise
+
         return all_db_objs
 
     def update(self, record_id: str, obj_in: BaseModel) -> ZangiaJobTable:
@@ -112,30 +123,36 @@ class LambdaJobRepository(DatabaseRepository):
     
     def batch_create(self, objs_in: List[BaseModel], chunk_size: int = 100) -> List[LambdaJobTable]:
         """Insert records in chunks, skipping duplicates."""
-        all_db_objs = []
+        all_db_objs: List[LambdaJobTable] = []
         skipped = 0
-        
+
+        # Pre-fetch existing IDs to avoid N+1 per-item queries
+        existing_ids = self.get_all_ids()
+
         for i in range(0, len(objs_in), chunk_size):
             chunk = objs_in[i:i + chunk_size]
-            db_objs = []
-            for obj_in in chunk:
-                data = obj_in.model_dump(exclude_none=True)
-                if not data.get("id"):
-                    raise ValueError("LambdaJob requires non-empty `id`.")
-                print(data["id"])
-                # Check if already exists
-                existing = self.db_session.query(LambdaJobTable).filter(LambdaJobTable.id == data["id"]).first()
-                if existing:
-                    skipped += 1
-                    continue
-                    
-                db_obj = LambdaJobTable(**data)
-                self.db_session.add(db_obj)
-                db_objs.append(db_obj)
-            self.db_session.commit()
-            all_db_objs.extend(db_objs)
-            print(f"Inserted chunk {i // chunk_size + 1} ({len(db_objs)} records, skipped {skipped} duplicates)")
-        
+            db_objs: List[LambdaJobTable] = []
+            try:
+                for obj_in in chunk:
+                    data = obj_in.model_dump(exclude_none=True)
+                    if not data.get("id"):
+                        raise ValueError("LambdaJob requires non-empty `id`.")
+                    if data["id"] in existing_ids:
+                        skipped += 1
+                        continue
+                    db_obj = LambdaJobTable(**data)
+                    self.db_session.add(db_obj)
+                    db_objs.append(db_obj)
+                    existing_ids.add(data["id"])
+                self.db_session.commit()
+                all_db_objs.extend(db_objs)
+                logger.info("Lambda chunk %d: inserted %d, skipped %d duplicates",
+                            i // chunk_size + 1, len(db_objs), skipped)
+            except Exception:
+                self.db_session.rollback()
+                logger.exception("Lambda chunk %d failed – rolled back", i // chunk_size + 1)
+                raise
+
         return all_db_objs
 
     def update(self, record_id: int, obj_in: BaseModel) -> LambdaJobTable:
@@ -168,7 +185,7 @@ class JobClassificationOutputRepository(DatabaseRepository):
 
         check_existing = self.get_by_id(obj_in["id"])
         if check_existing:
-            print(f"Record with id {obj_in['id']} already exists. Skipping creation.")
+            logger.debug("JobClassificationOutput id=%s already exists – skipping", obj_in["id"])
             return check_existing
 
         data = obj_in.copy()
@@ -215,7 +232,8 @@ class SalaryCalculationOutputRepository(DatabaseRepository):
         #check id exists
         check_existing = self.check_exists(obj_in)
         if check_existing:
-            print(f"Record for {obj_in.get('title')} ({obj_in.get('type')}) for {obj_in.get('month')}/{obj_in.get('year')} already exists. Skipping creation.")
+            logger.debug("SalaryCalc record for %s (%s) %s/%s already exists – skipping",
+                         obj_in.get("title"), obj_in.get("type"), obj_in.get("month"), obj_in.get("year"))
             return check_existing
 
         data = obj_in.copy()

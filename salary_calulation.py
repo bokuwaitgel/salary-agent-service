@@ -8,6 +8,7 @@ from src.service.paylab_data_converter import PaylabDataConverter
 from pydantic_ai import BinaryContent
 from typing import List
 import asyncio
+import logging
 import sys
 import json
 from dotenv import load_dotenv
@@ -16,14 +17,16 @@ from markdownify import markdownify as md
 import pandas as pd
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # Fix for Windows asyncio event loop issues
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 #addictional data for salary calculation, we can use this data to analyze salary 
 statista_data_path = "additional_data/salary_statistics.json"
 
-current_year = 2026
-current_month = 3
+current_year = int(os.getenv("SALARY_CURRENT_YEAR", "2026"))
+current_month = int(os.getenv("SALARY_CURRENT_MONTH", "3"))
 
 config = SalaryAgentConfig()
 agent = SalaryAgent(config=config)
@@ -39,20 +42,44 @@ statistic_df["value"] = statistic_df["value"] * 1000
 statistic_df.to_csv("additional_data/salary_statistics.csv", index=False)
 
 #load additional data
-additional_data = {
-    "salary_statistics": BinaryContent(data=open("additional_data/salary_statistics.csv", "rb").read(), media_type="text/csv"),
-}
+with open("additional_data/salary_statistics.csv", "rb") as _csv_fh:
+    additional_data = {
+        "salary_statistics": BinaryContent(data=_csv_fh.read(), media_type="text/csv"),
+    }
 
 repository: SalaryCalculationOutputRepository = get_salary_calculation_output_repository()
 classifier_repository = get_classifier_output_repository()
 _group_maps_cache = None
 
 
+def _serialize_experience_breakdown(breakdown_list: List[JobXEducationLevel]) -> str:
+    """Serialize experience breakdown list to a valid JSON string."""
+    items = []
+    for item in breakdown_list:
+        items.append({
+            "experience_level": item.experience_level,
+            "min_salary": item.salary_min,
+            "max_salary": item.salary_max,
+        })
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _format_paylab_text(paylab_records: list) -> str:
+    """Format paylab records into a text string for the agent."""
+    lines = []
+    for p in paylab_records:
+        lines.append(
+            f"Title: {p.get('title', '')}, Company: {p.get('company_name', '')}, "
+            f"Salary Min: {p.get('salary_min', '')}, Salary Max: {p.get('salary_max', '')}"
+        )
+    return "\n".join(lines)
+
+
 def _load_group_maps_from_db():
     datas = classifier_repository.get_by_query(
         (JobClassificationOutputTable.year == str(current_year)) & (JobClassificationOutputTable.month == f"{current_month:02d}") & (JobClassificationOutputTable.source_job != "paylab")
     )
-    print(f"Total classified jobs in database: {len(datas)}")
+    logger.info("Total classified jobs in database: %d", len(datas))
 
     def _is_valid_category(value) -> bool:
         text = str(value or "").strip()
@@ -156,21 +183,21 @@ async def paylab_salary(industry: str, job_function: str, techpack_category: str
         return job_inputs
         
     if not industry and not job_function:
-        print("Industry and job function must be provided for paylab salary analysis.")
+        logger.info("Industry and job function must be provided for paylab salary analysis.")
         return []
     
     if industry.lower() == "бусад":
-        print("Industry is 'Бусад', skipping paylab salary analysis.")
+        logger.debug("Industry is 'Бусад', skipping paylab salary analysis.")
         return []
     
     if job_function.lower() == "бусад":
-        print("Job function is 'Бусад', skipping paylab salary analysis.")
+        logger.debug("Job function is 'Бусад', skipping paylab salary analysis.")
         return []
     
     if industry and job_function:
         industry = industry.strip()
         job_function = job_function.strip()
-        print(f"Fetching Paylab salary data for Industry: '{industry}', Job Function: '{job_function}'")
+        logger.info("Fetching Paylab salary data for Industry: '%s', Job Function: '%s'", industry, job_function)
         datas = classifier_repository.get_by_query(
             (JobClassificationOutputTable.year == str(current_year)) & 
             (JobClassificationOutputTable.month == f"{current_month:02d}") & 
@@ -181,7 +208,7 @@ async def paylab_salary(industry: str, job_function: str, techpack_category: str
     
     if industry and not job_function:
         industry = industry.strip()
-        print(f"Fetching Paylab salary data for Industry: '{industry}'")
+        logger.info("Fetching Paylab salary data for Industry: '%s'", industry)
         datas = classifier_repository.get_by_query(
             (JobClassificationOutputTable.year == str(current_year)) &
             (JobClassificationOutputTable.month == f"{current_month:02d}") &
@@ -191,7 +218,7 @@ async def paylab_salary(industry: str, job_function: str, techpack_category: str
 
     if job_function and not industry:
         job_function = job_function.strip()
-        print(f"Fetching Paylab salary data for Job Function: '{job_function}'")
+        logger.info("Fetching Paylab salary data for Job Function: '%s'", job_function)
         datas = classifier_repository.get_by_query(
             (JobClassificationOutputTable.year == str(current_year)) &
             (JobClassificationOutputTable.month == f"{current_month:02d}") &
@@ -199,7 +226,7 @@ async def paylab_salary(industry: str, job_function: str, techpack_category: str
             (JobClassificationOutputTable.job_function == job_function)
         )
 
-    print(f"Total Paylab classified jobs in database for given criteria: {len(datas)}")
+    logger.info("Total Paylab classified jobs in database for given criteria: %d", len(datas))
 
     job_inputs = []
     for data in datas:
@@ -220,14 +247,8 @@ async def industry_salary():
 
         jobs = details.get("jobs", [])
 
-        #filter only source_job is zangia or lambda
-
-        paylab_data =""
         paylab = await paylab_salary(industry=industry, job_function="")
-
-        for p in paylab:
-            paylab_data += f"Title: {p.get('title', '')}, Company: {p.get('company_name', '')}, Salary Min: {p.get('salary_min', '')}, Salary Max: {p.get('salary_max', '')}\n"
-
+        paylab_data = _format_paylab_text(paylab)
 
         additional_data_prep = {
             **additional_data,
@@ -243,25 +264,10 @@ async def industry_salary():
             additional_data=additional_data_prep
         )
         result = await processor.calculate_salary(job_data=salary_input)
-        print(f"Salary analysis for industry: {industry}")
-        print(result)
-        print("----")
+        logger.info("Salary analysis for industry: %s", industry)
 
         if result:
-            experience_salary_breakdown = "["
-            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
-            for item in experience_salary_breakdown_list:
-                experience_level= item.experience_level
-                min_salary = item.salary_min
-                max_salary = item.salary_max
-                print(f"Experience Level: {experience_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
-                #dump experience salary breakdown into json string
-                experience_salary_breakdown += json.dumps({
-                    "experience_level": experience_level,
-                    "min_salary": min_salary,
-                    "max_salary": max_salary
-                }, ensure_ascii=False) + ","
-            experience_salary_breakdown += "]"
+            experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
 
             data_output = {
                 "title": industry,
@@ -283,7 +289,7 @@ async def industry_salary():
             }
 
             repository.create(data_output)
-            print(f"Saved salary analysis for industry: {industry}")
+            logger.info("Saved salary analysis for industry: %s", industry)
 
 async def functional_salary():
     function_map = _get_group_maps_from_db().get("function", {})
@@ -299,10 +305,8 @@ async def functional_salary():
             job_input = MainSalaryAgentData(**job)
             job_inputs.append(job_input)
 
-        paylab_data = ""
         paylab = await paylab_salary(industry="", job_function=function)
-        for p in paylab:
-            paylab_data += f"Title: {p.get('title', '')}, Company: {p.get('company_name', '')}, Salary Min: {p.get('salary_min', '')}, Salary Max: {p.get('salary_max', '')}\n"
+        paylab_data = _format_paylab_text(paylab)
         
         additional_data_prep = {
             **additional_data,
@@ -316,26 +320,10 @@ async def functional_salary():
         )
 
         result = await processor.calculate_salary(job_data=salary_input)
-        print(f"Salary analysis for function: {function}")
-        print(result)
-        print("----")
+        logger.info("Salary analysis for function: %s", function)
 
         if result:
-       
-            experience_salary_breakdown = "["
-            experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
-            for item in experience_salary_breakdown_list:
-                experience_level= item.experience_level
-                min_salary = item.salary_min
-                max_salary = item.salary_max
-                print(f"Experience Level: {experience_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
-                #dump experience salary breakdown into json string
-                experience_salary_breakdown += json.dumps({
-                    "experience_level": experience_level,
-                    "min_salary": min_salary,
-                    "max_salary": max_salary
-                }, ensure_ascii=False) + ","
-            experience_salary_breakdown += "]"
+            experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
 
             data_output = {
                 "title": function,
@@ -357,7 +345,7 @@ async def functional_salary():
             }
 
             repository.create(data_output)
-            print(f"Saved salary analysis for function: {function}")
+            logger.info("Saved salary analysis for function: %s", function)
     
     # get all industry data for all function salary analysis
     industry_map = _get_group_maps_from_db().get("industry", {})
@@ -381,11 +369,8 @@ async def functional_salary():
                 job_input = MainSalaryAgentData(**job)
                 job_inputs.append(job_input)
 
-            paylab_data = ""
-            
             paylab = await paylab_salary(industry=industry, job_function=function)
-            for p in paylab:
-                paylab_data += f"Title: {p.get('title', '')}, Company: {p.get('company_name', '')}, Salary Min: {p.get('salary_min', '')}, Salary Max: {p.get('salary_max', '')}\n"
+            paylab_data = _format_paylab_text(paylab)
 
             additional_data_prep = {
                 **additional_data,
@@ -399,26 +384,10 @@ async def functional_salary():
             )
 
             result = await processor.calculate_salary(job_data=salary_input)
-            print(f"Salary analysis for industry: {industry}, function: {function}")
-            print(result)
-            print("----")
+            logger.info("Salary analysis for industry: %s, function: %s", industry, function)
 
             if result:
-                experience_salary_breakdown = "["
-                experience_salary_breakdown_list: List[JobXEducationLevel] = result.experience_salary_breakdown
-                for item in experience_salary_breakdown_list:
-                    experience_level= item.experience_level
-                    min_salary = item.salary_min
-                    max_salary = item.salary_max
-                    print(f"Experience Level: {experience_level}, Min Salary: {min_salary}, Max Salary: {max_salary}")
-                    #dump experience salary breakdown into json string
-                    experience_salary_breakdown += json.dumps({
-                        "experience_level": experience_level,
-                        "min_salary": min_salary,
-                        "max_salary": max_salary
-                    }, ensure_ascii=False) + ","
-
-                experience_salary_breakdown += "]"
+                experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
 
                 data_output = {
                     "title": f"{industry} - {function}",
@@ -435,12 +404,12 @@ async def functional_salary():
                     "zangia_count": len([job for job in function_jobs if job.get("source_job") == "zangia"]),
                     "lambda_count": len([job for job in function_jobs if job.get("source_job") == "lambda"]),
                     "type": "function_by_industry",
-                    "year": 2025,
-                    "month": 2,
+                    "year": current_year,
+                    "month": current_month,
                 }
 
                 repository.create(data_output)
-                print(f"Saved salary analysis for industry: {industry}, function: {function}")
+                logger.info("Saved salary analysis for industry: %s, function: %s", industry, function)
           
 async def job_level_salary():
     job_level_map = _get_group_maps_from_db().get("job_level", {})
@@ -1443,7 +1412,7 @@ async def techpack_category_salary():
 async def main():
     """Main function to run all salary calculations sequentially."""
     # await industry_salary()  
-    await functional_salary()
+    # await functional_salary()
     await job_level_salary()
     await techpack_category_salary()
     # await all_salary()

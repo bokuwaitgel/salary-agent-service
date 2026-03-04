@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from io import BytesIO
@@ -10,7 +11,11 @@ from fastapi.responses import StreamingResponse
 from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy import create_engine, text
 
+from schemas.database.base_classifier_db import Base as ClassifierBase
+from schemas.database.salary_calculation_db import Base as SalaryCalculationBase
 from src.api.api_routes import register
+
+logger = logging.getLogger(__name__)
 
 _MAIN_CACHE: Optional[pd.DataFrame] = None
 _MAIN_CACHE_TS: float = 0.0
@@ -20,26 +25,45 @@ _JOBS_FILTER_OPTIONS_CACHE: Optional[Dict[str, List[str]]] = None
 _JOBS_FILTER_OPTIONS_CACHE_TS: float = 0.0
 _JOBS_COLUMNS_CACHE: Optional[set[str]] = None
 _JOBS_COLUMNS_CACHE_TS: float = 0.0
+_ENGINE_INSTANCE = None
+
+# Configurable cache TTLs (seconds)
+_CACHE_TTL_MAIN = int(os.getenv("CACHE_TTL_MAIN", "45"))
+_CACHE_TTL_JOBS = int(os.getenv("CACHE_TTL_JOBS", "45"))
+_CACHE_TTL_FILTER_OPTIONS = int(os.getenv("CACHE_TTL_FILTER_OPTIONS", "300"))
+_CACHE_TTL_COLUMNS = int(os.getenv("CACHE_TTL_COLUMNS", "600"))
+
+
+def _is_all_like_value(value: object) -> bool:
+    if value is None:
+        return True
+    normalized = str(value).strip().lower().replace("_", " ")
+    return normalized in {"", "all", "бүгд", "none", "null"}
 
 
 def _engine():
-    return create_engine(os.getenv("DATABASE_URI", "sqlite:///products.db"), pool_pre_ping=True)
+    global _ENGINE_INSTANCE
+    if _ENGINE_INSTANCE is None:
+        _ENGINE_INSTANCE = create_engine(os.getenv("DATABASE_URI", "sqlite:///products.db"), pool_pre_ping=True)
+        SalaryCalculationBase.metadata.create_all(_ENGINE_INSTANCE, checkfirst=True)
+        ClassifierBase.metadata.create_all(_ENGINE_INSTANCE, checkfirst=True)
+    return _ENGINE_INSTANCE
 
 
 def _to_float(value: object) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, str):
-        text = value.strip().replace("\u00a0", " ").replace("₮", "").replace(" ", "")
-        if not text:
+        cleaned = value.strip().replace("\u00a0", " ").replace("₮", "").replace(" ", "")
+        if not cleaned:
             return None
-        if text.count(",") > 1 and "." not in text:
-            text = text.replace(",", "")
-        elif text.count(".") > 1 and "," not in text:
-            text = text.replace(".", "")
-        elif "," in text and "." not in text:
-            text = text.replace(",", "")
-        value = text
+        if cleaned.count(",") > 1 and "." not in cleaned:
+            cleaned = cleaned.replace(",", "")
+        elif cleaned.count(".") > 1 and "," not in cleaned:
+            cleaned = cleaned.replace(".", "")
+        elif "," in cleaned and "." not in cleaned:
+            cleaned = cleaned.replace(",", "")
+        value = cleaned
     try:
         parsed = float(cast(str | int | float, value))
     except (TypeError, ValueError):
@@ -66,10 +90,10 @@ def _load_main_df(refresh: bool = False) -> pd.DataFrame:
     global _MAIN_CACHE, _MAIN_CACHE_TS
 
     now = time.time()
-    if not refresh and _MAIN_CACHE is not None and (now - _MAIN_CACHE_TS) < 45:
+    if not refresh and _MAIN_CACHE is not None and (now - _MAIN_CACHE_TS) < _CACHE_TTL_MAIN:
         return _MAIN_CACHE.copy()
 
-    df = pd.read_sql("SELECT * FROM salary_list ORDER BY created_at DESC", _engine())
+    df = pd.read_sql("SELECT * FROM salary_calculation_list  ORDER BY created_at DESC", _engine())
 
     for col in [
         "min_salary",
@@ -106,6 +130,7 @@ def _load_main_df(refresh: bool = False) -> pd.DataFrame:
 
     _MAIN_CACHE = df
     _MAIN_CACHE_TS = now
+    logger.info("Loaded %d rows from salary_calculation_list", len(df))
     return df.copy()
 
 
@@ -113,7 +138,7 @@ def _load_jobs_df(limit: int = 10000, refresh: bool = False) -> pd.DataFrame:
     global _JOBS_CACHE, _JOBS_CACHE_TS
 
     now = time.time()
-    if not refresh and _JOBS_CACHE is not None and (now - _JOBS_CACHE_TS) < 45:
+    if not refresh and _JOBS_CACHE is not None and (now - _JOBS_CACHE_TS) < _CACHE_TTL_JOBS:
         return _JOBS_CACHE.head(limit).copy()
 
     existing_cols = _get_jobs_columns(refresh=refresh)
@@ -130,7 +155,7 @@ def _load_jobs_df(limit: int = 10000, refresh: bool = False) -> pd.DataFrame:
     else:
         order_clause = ""
 
-    query = f"SELECT {select_clause} FROM job_classification_output{order_clause} LIMIT :limit"
+    query = f"SELECT {select_clause} FROM job_classification{order_clause} LIMIT :limit"
     engine = _engine()
     df = pd.read_sql(text(query), engine, params={"limit": int(limit)})
 
@@ -150,11 +175,11 @@ def _get_jobs_columns(refresh: bool = False) -> set[str]:
     global _JOBS_COLUMNS_CACHE, _JOBS_COLUMNS_CACHE_TS
 
     now = time.time()
-    if not refresh and _JOBS_COLUMNS_CACHE is not None and (now - _JOBS_COLUMNS_CACHE_TS) < 600:
+    if not refresh and _JOBS_COLUMNS_CACHE is not None and (now - _JOBS_COLUMNS_CACHE_TS) < _CACHE_TTL_COLUMNS:
         return set(_JOBS_COLUMNS_CACHE)
 
     engine = _engine()
-    cols_df = pd.read_sql("SELECT * FROM job_classification_output LIMIT 1", engine)
+    cols_df = pd.read_sql("SELECT * FROM job_classification LIMIT 1", engine)
     cols = set(cols_df.columns.tolist())
     _JOBS_COLUMNS_CACHE = cols
     _JOBS_COLUMNS_CACHE_TS = now
@@ -191,12 +216,23 @@ def _jobs_select_columns(existing_cols: set[str]) -> List[str]:
     return sorted(existing_cols)
 
 
+# Whitelist of columns that may be used in _distinct_values to prevent SQL injection
+_ALLOWED_DISTINCT_COLUMNS = {
+    "source_job", "source", "platform", "site_name", "website",
+    "job_function", "job_industry", "job_level", "company_name",
+    "job_techpack_category", "experience_level", "education_level",
+}
+
+
 def _distinct_values(engine, column_name: str) -> List[str]:
-    query = text(f"SELECT DISTINCT {column_name} AS value FROM job_classification_output WHERE {column_name} IS NOT NULL")
+    if column_name not in _ALLOWED_DISTINCT_COLUMNS:
+        logger.warning("Blocked _distinct_values for non-whitelisted column: %s", column_name)
+        return []
+    query = text(f"SELECT DISTINCT {column_name} AS value FROM job_classification WHERE {column_name} IS NOT NULL")
     df = pd.read_sql(query, engine)
     if df.empty or "value" not in df.columns:
         return []
-    values = [str(v).strip() for v in df["value"].astype(str).tolist() if str(v).strip()]
+    values = [str(v).strip() for v in df["value"].astype(str).tolist() if str(v).strip() and not _is_all_like_value(v)]
     return sorted(list(set(values)))
 
 
@@ -204,7 +240,7 @@ def _load_jobs_filter_options(refresh: bool = False) -> Dict[str, List[str]]:
     global _JOBS_FILTER_OPTIONS_CACHE, _JOBS_FILTER_OPTIONS_CACHE_TS
 
     now = time.time()
-    if not refresh and _JOBS_FILTER_OPTIONS_CACHE is not None and (now - _JOBS_FILTER_OPTIONS_CACHE_TS) < 300:
+    if not refresh and _JOBS_FILTER_OPTIONS_CACHE is not None and (now - _JOBS_FILTER_OPTIONS_CACHE_TS) < _CACHE_TTL_FILTER_OPTIONS:
         return dict(_JOBS_FILTER_OPTIONS_CACHE)
 
     engine = _engine()
@@ -248,6 +284,13 @@ def _load_jobs_df_filtered(
     selected_company: Optional[str] = None,
 ) -> pd.DataFrame:
     global _JOBS_CACHE, _JOBS_CACHE_TS
+
+    # Sanitize all-like filter values to None
+    source = None if _is_all_like_value(source) else source
+    selected_function = None if _is_all_like_value(selected_function) else selected_function
+    selected_industry = None if _is_all_like_value(selected_industry) else selected_industry
+    selected_level = None if _is_all_like_value(selected_level) else selected_level
+    selected_company = None if _is_all_like_value(selected_company) else selected_company
 
     has_filters = any(
         bool(v and str(v).strip())
@@ -317,13 +360,12 @@ def _load_jobs_df_filtered(
 
     select_cols = _jobs_select_columns(existing_cols)
     select_clause = ", ".join(select_cols)
-    query = f"SELECT {select_clause} FROM job_classification_output{where_clause}{order_clause} LIMIT :limit"
+    query = f"SELECT {select_clause} FROM job_classification{where_clause}{order_clause} LIMIT :limit"
     params["limit"] = int(limit)
 
     df = pd.read_sql(text(query), engine, params=params)
 
-    _JOBS_CACHE = df
-    _JOBS_CACHE_TS = time.time()
+    # Don't pollute the unfiltered cache with filtered results
     return df.copy()
 
 
@@ -367,9 +409,13 @@ def _rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str) -> bytes:
 
 @register(name="dashboard/main-data", method="POST", required_keys=[], optional_keys={"refresh": False})
 async def dashboard_main_data_handler(data: dict):
-    refresh = bool(data.get("refresh", False))
-    df = _load_main_df(refresh=refresh)
-    return {"items": _json_ready_records(df), "count": int(len(df))}
+    try:
+        refresh = bool(data.get("refresh", False))
+        df = _load_main_df(refresh=refresh)
+        return {"items": _json_ready_records(df), "count": int(len(df))}
+    except Exception:
+        logger.exception("dashboard/main-data failed")
+        return {"items": [], "count": 0, "error": "Internal error loading main data"}
 
 
 @register(
@@ -388,32 +434,43 @@ async def dashboard_main_data_handler(data: dict):
     },
 )
 async def dashboard_jobs_data_handler(data: dict):
-    limit = int(data.get("limit", 10000) or 10000)
-    refresh = bool(data.get("refresh", False))
-    df = _load_jobs_df_filtered(
-        limit=limit,
-        refresh=refresh,
-        search=str(data.get("search") or "").strip() or None,
-        source=str(data.get("source") or "").strip() or None,
-        selected_function=str(data.get("selected_function") or "").strip() or None,
-        selected_industry=str(data.get("selected_industry") or "").strip() or None,
-        selected_level=str(data.get("selected_level") or "").strip() or None,
-        selected_company=str(data.get("selected_company") or "").strip() or None,
-    )
-    return {"items": _json_ready_records(df.head(limit)), "count": int(len(df))}
+    try:
+        limit = int(data.get("limit", 10000) or 10000)
+        refresh = bool(data.get("refresh", False))
+        df = _load_jobs_df_filtered(
+            limit=limit,
+            refresh=refresh,
+            search=str(data.get("search") or "").strip() or None,
+            source=str(data.get("source") or "").strip() or None,
+            selected_function=str(data.get("selected_function") or "").strip() or None,
+            selected_industry=str(data.get("selected_industry") or "").strip() or None,
+            selected_level=str(data.get("selected_level") or "").strip() or None,
+            selected_company=str(data.get("selected_company") or "").strip() or None,
+        )
+        return {"items": _json_ready_records(df.head(limit)), "count": int(len(df))}
+    except Exception:
+        logger.exception("dashboard/jobs-data failed")
+        return {"items": [], "count": 0, "error": "Internal error loading jobs data"}
 
 
 @register(name="dashboard/jobs-filter-options", method="POST", required_keys=[], optional_keys={"refresh": False})
 async def dashboard_jobs_filter_options_handler(data: dict):
-    refresh = bool(data.get("refresh", False))
-    options = _load_jobs_filter_options(refresh=refresh)
-    return {
-        "source_options": [{"label": v, "value": v} for v in options.get("source", [])],
-        "function_options": [{"label": v, "value": v} for v in options.get("function", [])],
-        "industry_options": [{"label": v, "value": v} for v in options.get("industry", [])],
-        "level_options": [{"label": v, "value": v} for v in options.get("level", [])],
-        "company_options": [{"label": v, "value": v} for v in options.get("company", [])],
-    }
+    try:
+        refresh = bool(data.get("refresh", False))
+        options = _load_jobs_filter_options(refresh=refresh)
+        return {
+            "source_options": [{"label": v, "value": v} for v in options.get("source", [])],
+            "function_options": [{"label": v, "value": v} for v in options.get("function", [])],
+            "industry_options": [{"label": v, "value": v} for v in options.get("industry", [])],
+            "level_options": [{"label": v, "value": v} for v in options.get("level", [])],
+            "company_options": [{"label": v, "value": v} for v in options.get("company", [])],
+        }
+    except Exception:
+        logger.exception("dashboard/jobs-filter-options failed")
+        return {
+            "source_options": [], "function_options": [],
+            "industry_options": [], "level_options": [], "company_options": [],
+        }
 
 
 @register(name="download/dashboard-report", method="POST", required_keys=["rows"], optional_keys={"filename": "salary_report.xlsx"})
