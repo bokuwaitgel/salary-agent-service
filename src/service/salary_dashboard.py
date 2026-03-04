@@ -40,6 +40,7 @@ COLORS = {
 
 TYPE_LABELS = {
     "function": "Чиг үүрэг",
+    "function_by_industry": "Салбар + Чиг үүрэг",
     "job_level": "Албан тушаалын түвшин",
     "industry": "Үйл ажиллагааны чиглэл/Салбар",
     "techpack_category": "Албан тушаал",
@@ -188,6 +189,53 @@ def _first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str
         if col in df.columns:
             return col
     return None
+
+
+def _distinct_non_empty_values(df: pd.DataFrame, column_name: str) -> List[str]:
+    if df.empty or column_name not in df.columns:
+        return []
+    values = df[column_name].dropna().astype(str).str.strip()
+    values = values[values != ""]
+    return sorted(values.unique().tolist())
+
+
+def _apply_main_dimension_filters(
+    df: pd.DataFrame,
+    selected_function: Optional[str] = None,
+    selected_industry: Optional[str] = None,
+    selected_level: Optional[str] = None,
+    selected_category: Optional[str] = None,
+    selected_year: Optional[str] = None,
+    selected_month: Optional[str] = None,
+) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    filtered = df.copy()
+    dimensions = [
+        ("job_function", selected_function),
+        ("industry", selected_industry),
+        ("job_level", selected_level),
+        ("techpack_category", selected_category),
+        ("year", selected_year),
+        ("month", selected_month),
+    ]
+    for col, value in dimensions:
+        if col not in filtered.columns or not value or not str(value).strip():
+            continue
+        if col in {"year", "month"}:
+            target_num = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            if pd.isna(target_num):
+                continue
+            current_num = pd.to_numeric(filtered[col], errors="coerce")
+            filtered = filtered[current_num == int(target_num)]
+            continue
+
+        target = str(value).strip().lower()
+        current = filtered[col].fillna("").astype(str).str.strip().str.lower()
+        filtered = filtered[current == target]
+
+    return filtered
 
 
 def _format_mnt(value: Optional[float]) -> str:
@@ -640,27 +688,46 @@ def _dashboard_page_layout() -> html.Div:
             dcc.Store(id="chat-open", data=False),
             dcc.Store(id="detail-table-raw", data=[]),
             html.Div(
-                className="panel card",
+                className="card jobs-filter-card",
                 children=[
-                    html.Div("Filters", className="panel-title"),
+                    html.Div("Өгөгдлийн сангаас хайлт ба шүүлтүүр", className="jobs-filter-section-title"),
                     html.Div(
-                        className="filter-grid",
+                        className="jobs-filter-grid",
                         children=[
                             html.Div(
                                 children=[
-                                    html.Label("Ангиллын төрөл", className="field-label"),
-                                    dcc.Dropdown(
-                                        id="type-selector",
-                                        options=[{"label": label, "value": key} for key, label in TYPE_LABELS.items()],
-                                        value="function",
-                                        clearable=False,
-                                    ),
+                                    html.Label("Салбар", className="field-label"),
+                                    dcc.Dropdown(id="main-industry", options=[], placeholder="Бүгд", clearable=True),
                                 ]
                             ),
                             html.Div(
                                 children=[
-                                    html.Label("Сонголт", className="field-label"),
-                                    dcc.Dropdown(id="title-filter", placeholder="Нэг эсвэл олон ангилал", multi=True, clearable=True),
+                                    html.Label("Функц", className="field-label"),
+                                    dcc.Dropdown(id="main-function", options=[], placeholder="Бүгд", clearable=True),
+                                ]
+                            ),
+                            html.Div(
+                                children=[
+                                    html.Label("Түвшин", className="field-label"),
+                                    dcc.Dropdown(id="main-level", options=[], placeholder="Бүгд", clearable=True),
+                                ]
+                            ),
+                            html.Div(
+                                children=[
+                                    html.Label("Категори", className="field-label"),
+                                    dcc.Dropdown(id="main-category", options=[], placeholder="Бүгд", clearable=True),
+                                ]
+                            ),
+                            html.Div(
+                                children=[
+                                    html.Label("Он", className="field-label"),
+                                    dcc.Dropdown(id="main-year", options=[], placeholder="Бүгд", clearable=True),
+                                ]
+                            ),
+                            html.Div(
+                                children=[
+                                    html.Label("Сар", className="field-label"),
+                                    dcc.Dropdown(id="main-month", options=[], placeholder="Бүгд", clearable=True),
                                 ]
                             ),
                         ],
@@ -1272,20 +1339,130 @@ def download_jobs_excel(n_clicks: int, table_data: Optional[List[Dict[str, objec
 
 
 @callback(
-    Output("title-filter", "options"),
-    Output("title-filter", "value"),
-    Input("type-selector", "value"),
+    Output("main-industry", "options"),
+    Output("main-function", "options"),
+    Output("main-level", "options"),
+    Output("main-category", "options"),
+    Output("main-year", "options"),
+    Output("main-month", "options"),
+    Output("main-industry", "value"),
+    Output("main-function", "value"),
+    Output("main-level", "value"),
+    Output("main-category", "value"),
+    Output("main-year", "value"),
+    Output("main-month", "value"),
+    Input("main-industry", "value"),
+    Input("main-function", "value"),
+    Input("main-level", "value"),
+    Input("main-category", "value"),
+    Input("main-year", "value"),
+    Input("main-month", "value"),
     Input("interval-component", "n_intervals"),
 )
-def update_title_options(selected_type: str, n_intervals: int):
-    if not selected_type:
-        return [], []
-    df = _exclude_all_titles(_filter_by_type(_load_data_main(), selected_type))
-    df = _latest_per_title(df)
+def update_main_filter_options(
+    selected_industry: Optional[str],
+    selected_function: Optional[str],
+    selected_level: Optional[str],
+    selected_category: Optional[str],
+    selected_year: Optional[str],
+    selected_month: Optional[str],
+    n_intervals: int,
+):
+    df = _exclude_all_titles(_load_data_main())
     if df.empty:
-        return [], []
-    options = [{"label": "Бүгд", "value": ALL_TITLES_VALUE}] + [{"label": title, "value": title} for title in sorted(df["title"].dropna().unique().tolist())]
-    return options, [ALL_TITLES_VALUE]
+        return [], [], [], [], [], [], None, None, None, None, None, None
+
+    should_default_latest_period = (
+        int(n_intervals or 0) == 0
+        and not (selected_industry and str(selected_industry).strip())
+        and not (selected_function and str(selected_function).strip())
+        and not (selected_level and str(selected_level).strip())
+        and not (selected_category and str(selected_category).strip())
+        and not (selected_year and str(selected_year).strip())
+        and not (selected_month and str(selected_month).strip())
+    )
+
+    industry_values = _distinct_non_empty_values(df, "industry")
+    industry_options = [{"label": v, "value": v} for v in industry_values]
+    if selected_industry and selected_industry not in industry_values:
+        selected_industry = None
+
+    df_industry = _apply_main_dimension_filters(df, selected_industry=selected_industry)
+    function_values = _distinct_non_empty_values(df_industry, "job_function")
+    function_options = [{"label": v, "value": v} for v in function_values]
+    if selected_function and selected_function not in function_values:
+        selected_function = None
+
+    df_function = _apply_main_dimension_filters(
+        df,
+        selected_industry=selected_industry,
+        selected_function=selected_function,
+    )
+    level_values = _distinct_non_empty_values(df_function, "job_level")
+    level_options = [{"label": v, "value": v} for v in level_values]
+    if selected_level and selected_level not in level_values:
+        selected_level = None
+
+    df_level = _apply_main_dimension_filters(
+        df,
+        selected_industry=selected_industry,
+        selected_function=selected_function,
+        selected_level=selected_level,
+    )
+    category_values = _distinct_non_empty_values(df_level, "techpack_category")
+    category_options = [{"label": v, "value": v} for v in category_values]
+    if selected_category and selected_category not in category_values:
+        selected_category = None
+
+    df_category = _apply_main_dimension_filters(
+        df,
+        selected_industry=selected_industry,
+        selected_function=selected_function,
+        selected_level=selected_level,
+        selected_category=selected_category,
+    )
+    year_series = pd.to_numeric(df_category["year"], errors="coerce") if "year" in df_category.columns else pd.Series(dtype=float)
+    year_values = sorted({int(v) for v in year_series.dropna().tolist()}, reverse=True)
+    year_options = [{"label": str(v), "value": str(v)} for v in year_values]
+
+    if should_default_latest_period and year_values:
+        selected_year = str(year_values[0])
+
+    if selected_year and selected_year not in {str(v) for v in year_values}:
+        selected_year = None
+
+    df_year = _apply_main_dimension_filters(
+        df,
+        selected_industry=selected_industry,
+        selected_function=selected_function,
+        selected_level=selected_level,
+        selected_category=selected_category,
+        selected_year=selected_year,
+    )
+    month_series = pd.to_numeric(df_year["month"], errors="coerce") if "month" in df_year.columns else pd.Series(dtype=float)
+    month_values = sorted({int(v) for v in month_series.dropna().tolist()})
+    month_options = [{"label": f"{v:02d}", "value": str(v)} for v in month_values]
+
+    if should_default_latest_period and month_values:
+        selected_month = str(month_values[-1])
+
+    if selected_month and selected_month not in {str(v) for v in month_values}:
+        selected_month = None
+
+    return (
+        industry_options,
+        function_options,
+        level_options,
+        category_options,
+        year_options,
+        month_options,
+        selected_industry,
+        selected_function,
+        selected_level,
+        selected_category,
+        selected_year,
+        selected_month,
+    )
 
 
 @callback(
@@ -1303,31 +1480,42 @@ def update_title_options(selected_type: str, n_intervals: int):
     Output("detail-table-raw", "data"),
     Output("detail-title-filter", "options"),
     Output("detail-title-filter", "value"),
-    Input("type-selector", "value"),
-    Input("title-filter", "value"),
+    Input("main-industry", "value"),
+    Input("main-function", "value"),
+    Input("main-level", "value"),
+    Input("main-category", "value"),
+    Input("main-year", "value"),
+    Input("main-month", "value"),
     Input("interval-component", "n_intervals"),
 )
-def update_dashboard(selected_type: str, selected_title: object, n_intervals: int):
-    if not selected_type:
-        empty = _empty_figure("Өгөгдөл олдсонгүй")
-        return _build_kpi_cards(pd.DataFrame()), empty, empty, empty, empty, empty, empty, [], [], [], [], [], [], []
-
-    df_all = _exclude_all_titles(_filter_by_type(_load_data_main(), selected_type))
+def update_dashboard(
+    selected_industry: Optional[str],
+    selected_function: Optional[str],
+    selected_level: Optional[str],
+    selected_category: Optional[str],
+    selected_year: Optional[str],
+    selected_month: Optional[str],
+    n_intervals: int,
+):
+    df_all = _exclude_all_titles(_load_data_main())
+    df_all = _apply_main_dimension_filters(
+        df_all,
+        selected_function=selected_function,
+        selected_industry=selected_industry,
+        selected_level=selected_level,
+        selected_category=selected_category,
+        selected_year=selected_year,
+        selected_month=selected_month,
+    )
     if df_all.empty:
         empty = _empty_figure("Өгөгдөл олдсонгүй")
         return _build_kpi_cards(df_all), empty, empty, empty, empty, empty, empty, [], [], [], [], [], [], []
 
     df_latest = _latest_per_title(df_all)
-    display_label = TYPE_LABELS.get(selected_type, "Төрөл")
-    available_titles = df_all["title"].dropna().astype(str).unique().tolist()
-    is_all_selected, selected_titles = _normalize_title_selection(selected_title, available_titles)
-
-    if is_all_selected:
-        df_selected = df_all.copy()
-        df_selected_latest = df_latest.copy()
-    else:
-        df_selected = df_all[df_all["title"].isin(selected_titles)].copy()
-        df_selected_latest = df_latest[df_latest["title"].isin(selected_titles)].copy()
+    display_label = "Ажлын ангилал"
+    is_all_selected = True
+    df_selected = df_all.copy()
+    df_selected_latest = df_latest.copy()
 
     kpis = _build_kpi_cards(df_selected_latest)
     if df_selected_latest.empty:
@@ -1622,14 +1810,22 @@ def legacy_ensure_session_id(n_intervals: int, session_id: Optional[str]):
     Output("avg-scatter", "figure", allow_duplicate=True),
     Output("detail-table", "data", allow_duplicate=True),
     Output("detail-table", "columns", allow_duplicate=True),
-    Input("type-selector", "value"),
-    Input("title-filter", "value"),
+    Input("main-industry", "value"),
+    Input("main-function", "value"),
+    Input("main-level", "value"),
+    Input("main-category", "value"),
+    Input("main-year", "value"),
+    Input("main-month", "value"),
     Input("interval-component", "n_intervals"),
     prevent_initial_call=True,
 )
 def legacy_update_dashboard(
-    selected_type: str,
-    selected_title: object,
+    selected_industry: Optional[str],
+    selected_function: Optional[str],
+    selected_level: Optional[str],
+    selected_category: Optional[str],
+    selected_year: Optional[str],
+    selected_month: Optional[str],
     n_intervals: int,
 ):
     (
@@ -1647,7 +1843,15 @@ def legacy_update_dashboard(
         _table_raw,
         _title_options,
         _title_value,
-    ) = update_dashboard(selected_type, selected_title, n_intervals)
+    ) = update_dashboard(
+        selected_industry,
+        selected_function,
+        selected_level,
+        selected_category,
+        selected_year,
+        selected_month,
+        n_intervals,
+    )
 
     return (
         kpis,

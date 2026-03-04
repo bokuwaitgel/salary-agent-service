@@ -69,7 +69,7 @@ def _load_main_df(refresh: bool = False) -> pd.DataFrame:
     if not refresh and _MAIN_CACHE is not None and (now - _MAIN_CACHE_TS) < 45:
         return _MAIN_CACHE.copy()
 
-    df = pd.read_sql("SELECT * FROM salary_calculation_output ORDER BY created_at DESC", _engine())
+    df = pd.read_sql("SELECT * FROM salary_list ORDER BY created_at DESC", _engine())
 
     for col in [
         "min_salary",
@@ -83,6 +83,11 @@ def _load_main_df(refresh: bool = False) -> pd.DataFrame:
     ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in ["title", "reasoning", "industry", "job_function", "job_level", "techpack_category", "type"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            df.loc[df[col].isin(["", "nan", "None"]), col] = None
 
     if "created_at" in df.columns:
         df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
@@ -325,7 +330,7 @@ def _load_jobs_df_filtered(
 def _rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str) -> bytes:
     df = pd.DataFrame(rows)
 
-    for col in ["salary_min", "salary_max", "Доод цалин", "Дээд цалин", "Дундаж цалин"]:
+    for col in ["salary_min", "salary_max", "min_salary", "max_salary", "average_salary", "Доод цалин", "Дээд цалин", "Дундаж цалин"]:
         if col in df.columns:
             df[col] = df[col].apply(_to_float)
 
@@ -349,7 +354,7 @@ def _rows_to_excel_bytes(rows: List[Dict[str, Any]], sheet_name: str) -> bytes:
                     max_len = max(max_len, len(str(cell.value)))
             ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 55)
 
-        money_cols = {"salary_min", "salary_max", "Доод цалин", "Дээд цалин", "Дундаж цалин"}
+        money_cols = {"salary_min", "salary_max", "min_salary", "max_salary", "average_salary", "Доод цалин", "Дээд цалин", "Дундаж цалин"}
         for col_idx, cell in enumerate(ws[1], start=1):
             if str(cell.value) in money_cols:
                 for row in range(2, ws.max_row + 1):

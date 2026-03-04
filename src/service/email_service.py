@@ -175,7 +175,7 @@ def _build_salary_excel(type_filter: str = "function", title_filter: Optional[st
         os.getenv("DATABASE_URI", "sqlite:///products.db"),
         pool_pre_ping=True,
     )
-    query = "SELECT * FROM salary_calculation_output ORDER BY created_at DESC"
+    query = "SELECT * FROM salary_list ORDER BY created_at DESC"
     df = pd.read_sql(query, engine)
 
     if "type" in df.columns:

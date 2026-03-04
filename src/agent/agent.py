@@ -19,6 +19,10 @@ class SalaryAnalystAgent(ABC):
     async def calculate_salary(self, job_data: BaseModel | str | BinaryContent | List[BinaryContent]):
         pass
 
+    @abstractmethod
+    async def paylab_job_batch(self, input_data: List[dict] | List[BaseModel] | List[BinaryContent] | BinaryContent):
+        pass
+
 class AgentProcessor:
     def __init__(self, agent: Union[SalaryAnalystAgent, Any]):
         self.agent = agent
@@ -39,6 +43,11 @@ class AgentProcessor:
         logger.debug(f"Calculating salary with {type(self.agent).__name__}")
         result = await self.agent.calculate_salary(job_data)
         logger.debug(f"Salary calculation completed")
+        return result
+    
+    async def process_paylab_batch(self, input_data: List[dict] | List[BaseModel] | List[BinaryContent] | BinaryContent):
+        result = await self.agent.paylab_job_batch(input_data)
+        logger.info(f"Paylab batch processing completed")
         return result
     
     def __call__(self, *args: Any, **kwds: Any) -> Any:

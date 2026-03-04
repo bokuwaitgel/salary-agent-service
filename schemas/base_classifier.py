@@ -326,6 +326,21 @@ class JobClassificationOutput(BaseModel):
     benefits: List[JobBenefit] = Field(default_factory=list, description="List of identified job benefits and bonuses", min_length=0, max_length=5)
     confidence_scores: Optional[dict[str, float]] = Field(None, description="Confidence scores for each predicted category")
 
+class JobClassificationPaylabInput(BaseModel):
+    """Input data for paylab agent to estimate salary based on job classification output."""
+    category: JobTechpackCategory = Field(..., description="Predicted job category based on techpack classification")
+    category_min_salary: int = Field(..., description="Minimum salary in MNT for the predicted job category based on market data")
+    category_max_salary: int = Field(..., description="Maximum salary in MNT for the predicted job category based on market data")
+    title: str = Field(..., description="Predicted job title from classification output")
+    salary_min: Optional[int] = Field(None, description="Minimum salary offered for the position in MNT if available")
+    salary_max: Optional[int] = Field(None, description="Maximum salary offered for the position in MNT if available")
+
+class JobClassificationPaylabOutput(BaseModel):
+    """Output data for paylab agent's salary estimation."""
+    salary_min: int = Field(..., description="Estimated minimum salary in MNT based on classification output and input salary information")
+    salary_max: int = Field(..., description="Estimated maximum salary in MNT based on classification output and input salary information")
+    justification: str = Field(..., description="Justification for the estimated salary range based on market data, industry standards, and specific job characteristics. This should be 1 to 3 sentences in Mongolian language.")
+
 class JobClassifierAgentConfig(BaseModel):
     """Configuration for the Job Classification Agent."""
     system_prompt: str = Field(
@@ -354,7 +369,16 @@ class JobClassifierAgentConfig(BaseModel):
             ),
         description="System prompt that guides the agent's behavior and response format."
     )
-    model_name: str = Field(default="google-gla:gemini-2.5-pro", description="Name of the language model to use for classification.")
+    system_paylab_prompt: str = Field(
+        default=(
+            "You are a compensation analyst agent. Based on the job classification output and salary input, provide a salary estimation and justification.\n"
+            "1) If salary_min and salary_max are provided in the input, use them directly as the output without modification.\n"
+            "2) If salary information is missing, estimate salary_min and salary_max based on the job classification output (job_function, job_industry, job_level, experience_level, education_level) and any salary signals in the job description.\n"
+            "3) Provide a clear justification for the estimated salary range based on market data, industry standards, and the specific job characteristics. This should be 1-3 sentences in Mongolian."
+            ),
+        description="System prompt that guides the paylab agent's behavior and response format."
+    )
+    model_name: str = Field(default="google-gla:gemini-2.5-flash", description="Name of the language model to use for classification.")
     fallback_model_names: List[str] = Field(
         default_factory=lambda: ["google-gla:gemini-2.5-flash"],
         description="Fallback model names used when the primary model request fails."
@@ -378,6 +402,8 @@ class JobClassifierAgentConfig(BaseModel):
         description="Base backoff in seconds between retries."
     )
 
+
+
 class JobClassifierAgent(Agent):
     """Agent for classifying job listings into various categories and extracting requirements and benefits."""
     config: JobClassifierAgentConfig
@@ -385,6 +411,7 @@ class JobClassifierAgent(Agent):
         self.config = config
         self.agent = Agent(model=self.config.model_name, system_prompt=self.config.system_prompt, output_type=JobClassificationOutput)
         self.batch_agent = Agent(model=self.config.model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
+        self.paylab_agent = Agent(model=self.config.model_name, system_prompt=self.config.system_paylab_prompt, output_type=str)
 
     def _get_model_candidates(self) -> List[str]:
         candidates = [self.config.model_name, *self.config.fallback_model_names]
@@ -400,6 +427,34 @@ class JobClassifierAgent(Agent):
 
     def _build_batch_agent(self, model_name: str) -> Any:
         return Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
+
+    def _build_paylab_agent(self, model_name: str) -> Any:
+        return Agent(model=model_name, system_prompt=self.config.system_paylab_prompt, output_type=str)
+
+    @staticmethod
+    def _parse_paylab_json_output(raw_text: str) -> List[JobClassificationPaylabOutput]:
+        payload_text = (raw_text or "").strip()
+        if payload_text.startswith("```"):
+            payload_text = payload_text.strip("`")
+            if payload_text.lower().startswith("json"):
+                payload_text = payload_text[4:].strip()
+
+        payload = json.loads(payload_text)
+        if not isinstance(payload, list):
+            raise ValueError("Paylab output is not a JSON array.")
+
+        parsed: List[JobClassificationPaylabOutput] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                raise ValueError("Paylab output item is not a JSON object.")
+            parsed.append(
+                JobClassificationPaylabOutput(
+                    salary_min=int(item.get("salary_min", 0) or 0),
+                    salary_max=int(item.get("salary_max", 0) or 0),
+                    justification=str(item.get("justification", "") or "").strip(),
+                )
+            )
+        return parsed
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -647,6 +702,37 @@ class JobClassifierAgent(Agent):
             outputs.extend(chunk_outputs)
         print(f"Batch classification produced {len(outputs)} outputs.")
         return outputs
-
-
-
+    
+    async def paylab_job_batch(self, job_inputs: List[JobClassificationPaylabInput]) -> List[JobClassificationPaylabOutput]:
+        """Run paylab agent to estimate salary for multiple job classifications in batch."""
+        print(f"Running paylab agent for batch of {len(job_inputs)} job classifications...")
+        inputs = ""
+        for item in job_inputs:
+            inputs += f"Category: {item.category.value}, Category Min Salary: {item.category_min_salary}, Category Max Salary: {item.category_max_salary}, Title: {item.title}, Salary Min: {item.salary_min}, Salary Max: {item.salary_max}\n"
+        inputs += (
+            "\nReturn ONLY a valid JSON array. "
+            "Each item must have keys: salary_min (int), salary_max (int), justification (string). "
+            "Do not include markdown, explanation, or extra keys. "
+            "The output array length must exactly match the number of input rows in the same order."
+        )
+        
+        last_error: Optional[Exception] = None
+        for model_name in self._get_model_candidates():
+            agent = self._build_paylab_agent(model_name)
+            for attempt in range(self.config.retry_attempts + 1):
+                try:
+                    response = await agent.run(inputs)
+                    print("Usage of model for paylab batch:", response.usage())
+                    paylab_output = self._parse_paylab_json_output(cast(str, response.output))
+                    if len(paylab_output) == len(job_inputs):
+                        return paylab_output
+                    raise RuntimeError(f"Paylab batch output size mismatch. expected={len(job_inputs)} got={len(paylab_output)}")
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < self.config.retry_attempts:
+                        await asyncio.sleep(self.config.retry_backoff_seconds * (attempt + 1))
+                    else:
+                        print(f"Paylab batch failed on model={model_name}: {exc}")
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Paylab batch classification failed for unknown reason.")

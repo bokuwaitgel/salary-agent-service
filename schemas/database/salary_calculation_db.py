@@ -15,7 +15,7 @@ class SalaryCalculationOutput(BaseModel):
     average_salary: int = Field(..., description="Market median/average salary in MNT representing typical compensation for this role. Should fall between min and max, typically closer to min for entry-level roles and closer to max for senior roles.")
 
 class SalaryCalculationOutputTable(Base):
-    __tablename__ = 'salary_list'
+    __tablename__ = 'salary_calculation_list'
 
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
