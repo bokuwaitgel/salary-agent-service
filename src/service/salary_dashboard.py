@@ -812,7 +812,6 @@ def _dashboard_page_layout() -> html.Div:
                     ),
                 ],
             ),
-            dcc.Interval(id="interval-component", interval=5 * 60 * 1000, n_intervals=0),
             dcc.Download(id="excel-download"),
             dcc.Store(
                 id="chat-store",
@@ -1019,7 +1018,6 @@ def _jobs_list_layout() -> html.Div:
                     html.P("Шинэчлэгдсэн, шүүх боломжтой ажлын зарын жагсаалт (beta).", className="hero-subtitle"),
                 ],
             ),
-            dcc.Interval(id="jobs-interval", interval=120000, n_intervals=0),
             dcc.Download(id="jobs-excel-download"),
             dcc.Store(id="jobs-table-raw", data=[]),
             html.Div(
@@ -1282,7 +1280,6 @@ def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: Opti
     Output("jobs-table", "columns"),
     Output("jobs-table-raw", "data"),
     Input("jobs-api-search-btn", "n_clicks"),
-    Input("jobs-interval", "n_intervals"),
     State("jobs-api-search", "value"),
     State("jobs-source", "value"),
     State("jobs-function", "value"),
@@ -1292,7 +1289,6 @@ def fetch_chat_response(request_payload: Optional[Dict[str, str]], history: Opti
 )
 def update_jobs_list(
     n_clicks: int,
-    n_intervals: int,
     api_search_text: Optional[str],
     source: Optional[str],
     selected_function: Optional[str],
@@ -1300,7 +1296,7 @@ def update_jobs_list(
     selected_level: Optional[str],
     selected_company: Optional[str],
 ):
-    filter_options = _load_jobs_filter_options(refresh=(n_intervals == 0))
+    filter_options = _load_jobs_filter_options(refresh=False)
 
     source = _normalize_optional_filter(source)
     selected_function = _normalize_optional_filter(selected_function)
@@ -1582,7 +1578,6 @@ def download_jobs_excel(n_clicks: int, table_data: Optional[List[Dict[str, objec
     Input("main-category", "value"),
     Input("main-year", "value"),
     Input("main-month", "value"),
-    Input("interval-component", "n_intervals"),
 )
 def update_dashboard(
     selected_industry: Optional[str],
@@ -1591,7 +1586,6 @@ def update_dashboard(
     selected_category: Optional[str],
     selected_year: Optional[str],
     selected_month: Optional[str],
-    n_intervals: int,
 ):
     # ── normalise raw filter values ──
     selected_industry = _normalize_optional_filter(selected_industry)
