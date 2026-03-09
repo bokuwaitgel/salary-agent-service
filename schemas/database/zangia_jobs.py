@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Float, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -18,8 +18,11 @@ class ZangiaJobSchema(BaseModel):
         validation_alias=AliasChoices("id", "code"),
         description="Primary key. Populated from Zangia API `code`.",
     )
+    address: Optional[str] = Field(None, description="Job location")
+    age_requires: Optional[str] = Field(None, description="Age requirements for the job")
     company_name: Optional[str] = Field(None, description="Company name in Mongolian")
     company_name_en: Optional[str] = Field(None, description="Company name in English")
+    company_id: Optional[str] = Field(None, description="Company ID")
     job_level: Optional[str] = Field(None, description="Job level/title")
     job_level_id: Optional[int] = Field(None, description="Job level ID")
     salary_max: Optional[int] = Field(None, description="Maximum salary offered")
@@ -30,19 +33,24 @@ class ZangiaJobSchema(BaseModel):
     search_requirements: Optional[str] = Field(None, description="Job requirements")
     timetype: Optional[str] = Field(None, description="Type of employment (e.g., full-time)")
     title: Optional[str] = Field(None, description="Job title")
+    start_on: Optional[datetime] = Field(None, description="Job posting start date")
     year: Optional[str] = Field(None, description="Year of the job posting")
     month: Optional[str] = Field(None, description="Month of the job posting")
-    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow, description="Record creation timestamp")
+    is_active: Optional[bool] = Field(default=True, description="Indicates if the job posting is active")
+    created_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc), description="Record creation timestamp")
 
 
 Base = declarative_base()
 
 class ZangiaJobTable(Base):
-    __tablename__ = 'zangia_job_list'
+    __tablename__ = 'job_zangia'
 
     id = Column(String, primary_key=True)
+    address = Column(String, nullable=True)
+    age_requires = Column(String, nullable=True)
     company_name = Column(String, nullable=True)
     company_name_en = Column(String, nullable=True)
+    company_id = Column(String, nullable=True)
     job_level = Column(String, nullable=True)
     job_level_id = Column(Float, nullable=True)
     salary_max = Column(Float, nullable=True)
@@ -55,4 +63,6 @@ class ZangiaJobTable(Base):
     title = Column(String, nullable=True)
     year = Column(String, nullable=True)
     month = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.now(), nullable=False)
+    start_on = Column(DateTime, nullable=True)
+    is_active = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)

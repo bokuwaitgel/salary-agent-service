@@ -3,11 +3,14 @@ import re
 import urllib.parse
 import asyncio
 import requests
+from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import datetime
+from pydantic import ValidationError
 from schemas.database.lambda_jobs import LambdaJobSchema
+from src.logger import logger
 
 #get detail url 
 
@@ -79,34 +82,48 @@ def get_job_detail_from_request(job_url: str, max_retries: int = 3) -> dict:
     return {}
 
 async def get_all_data_and_save(repository):
-    url = "https://lambda.global/jobs?minSalary=1000000&maxSalary=15000000&page="
+    url = "https://lambda.global/jobs?minSalary=1000000&maxSalary=20000000&sortBy=newest&page="
     now = datetime.datetime.now(datetime.timezone.utc)
     current_year = str(now.year)
-    current_month = f"{(now.month % 12) + 1:02d}"
+    current_month = f"{now.month:02d}"
+
+    def _to_optional_str(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text else None
+
+    def _to_optional_int(value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     result_jobs = []
     page=1
     while True:
         full_url = f"{url}{page}"
-        print(f"Fetching jobs from: {full_url}")
+        logger.info("Fetching Lambda jobs from: %s", full_url)
         jobs = await fetch_jobs_with_playwright(full_url)
-        print(f"Extracted {len(jobs)} jobs:")
+        logger.info("Extracted %s Lambda jobs on page %s", len(jobs), page)
         if not jobs:
             break
         page += 1
         result_jobs.extend(jobs)
         
-    print(f"Total jobs so far: {len(result_jobs)}")
+    logger.info("Total Lambda jobs discovered: %s", len(result_jobs))
     #get existing job ids
     existing_job_ids = repository.get_all_ids()
-    print(f"Existing job IDs in database: {len(existing_job_ids)}")
+    logger.info("Existing Lambda job IDs in database: %s", len(existing_job_ids))
     
     # Filter jobs that need to be fetched
     jobs_to_fetch = [
         job for job in result_jobs 
         if job["job_id"] and f"{current_year}_{current_month}_{job['job_id']}" not in existing_job_ids
     ]
-    print(f"Jobs to fetch details for: {len(jobs_to_fetch)}")
+    logger.info("Lambda jobs to fetch details for: %s", len(jobs_to_fetch))
     
     # Fetch job details using ThreadPoolExecutor for batch processing
     new_jobs = []
@@ -114,7 +131,7 @@ async def get_all_data_and_save(repository):
     
     urls = [f"https://api.lambda.global/api/jobsPublic/{job['slug']}" for job in jobs_to_fetch]
     
-    print("Starting to fetch job details...")
+    logger.info("Starting to fetch Lambda job details")
     # Use ThreadPoolExecutor with 5 workers for concurrent requests
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(get_job_detail_from_request, url) for url in urls]
@@ -124,45 +141,44 @@ async def get_all_data_and_save(repository):
             if job_detail:
                 new_jobs.append(job_detail)
             if (idx + 1) % 10 == 0 or idx + 1 == total:
-                print(f"Fetched: {idx + 1}/{total} jobs...")
+                logger.info("Fetched Lambda details: %s/%s", idx + 1, total)
     
-    print(f"New jobs to be added: {len(new_jobs)}")
+    logger.info("New Lambda jobs fetched from API: %s", len(new_jobs))
     
     # Transform API response to match schema
     transformed_jobs = []
     for job in new_jobs:
-        print(job)
         recruiter = job.get("recruiter", {}) or {}
         salary = job.get("salary", {}) or {}
         transformed = {
-            "id": f"{current_year}_{current_month}_{job.get('id')}",
-            "title": job.get("title"),
-            "description": job.get("description"),
-            "location": job.get("location"),
-            "company_name": recruiter.get("company"),
-            "company_name_mn": recruiter.get("companyMn"),
-            "salary_min": salary.get("min"),
-            "salary_max": salary.get("max"),
-            "salary_type": salary.get("type"),
-            "position_type": job.get("positionType"),
-            "engagement_type": job.get("engagmentType"),
-            "pay_type": job.get("payType"),
-            "experience": job.get("experience"),
-            "responsibilities": job.get("responsibilities"),
+            "id": _to_optional_str(f"{current_year}_{current_month}_{job.get('id')}") if job.get("id") is not None else None,
+            "title": _to_optional_str(job.get("title")),
+            "description": _to_optional_str(job.get("description")),
+            "location": _to_optional_str(job.get("location")),
+            "company_name": _to_optional_str(recruiter.get("company")),
+            "company_name_mn": _to_optional_str(recruiter.get("companyMn")),
+            "salary_min": _to_optional_int(salary.get("min")),
+            "salary_max": _to_optional_int(salary.get("max")),
+            "salary_type": _to_optional_str(salary.get("type")),
+            "position_type": _to_optional_str(job.get("positionType")),
+            "engagement_type": _to_optional_str(job.get("engagmentType")),
+            "pay_type": _to_optional_str(job.get("payType")),
+            "experience": _to_optional_int(job.get("experience")),
+            "responsibilities": _to_optional_str(job.get("responsibilities")),
             "skills": json.dumps(job.get("skills", []), ensure_ascii=False) if job.get("skills") else None,
-            "commitment": job.get("commitment"),
-            "job_category_id": job.get("jobCategoryId"),
+            "commitment": _to_optional_str(job.get("commitment")),
+            "job_category_id": _to_optional_int(job.get("jobCategoryId")),
             "deadline": job.get("deadline"),
-            "slug": job.get("slug"),
-            "view_count": job.get("viewCount"),
-            "apply_count": int(job.get("applyCount", 0)) if job.get("applyCount") else None,
-            "recruiter_id": job.get("recruiterId"),
-            "recruiter_company": recruiter.get("company"),
-            "recruiter_industry": recruiter.get("industry"),
-            "recruiter_location": recruiter.get("location"),
+            "slug": _to_optional_str(job.get("slug")),
+            "view_count": _to_optional_int(job.get("viewCount")),
+            "apply_count": _to_optional_int(job.get("applyCount")),
+            "recruiter_id": _to_optional_int(job.get("recruiterId")),
+            "recruiter_company": _to_optional_str(recruiter.get("company")),
+            "recruiter_industry": _to_optional_str(recruiter.get("industry")),
+            "recruiter_location": _to_optional_str(recruiter.get("location")),
             "recruiter_verified": 1 if recruiter.get("verified") else 0,
             "tags": json.dumps([tag.get("nameMn") for tag in job.get("tags", []) if tag.get("nameMn")], ensure_ascii=False) if job.get("tags") else None,
-            "status": job.get("status"),
+            "status": _to_optional_str(job.get("status")),
             "year": current_year,
             "month": current_month,
             "api_created_at": job.get("createdAt"),
@@ -170,6 +186,26 @@ async def get_all_data_and_save(repository):
         }
         transformed_jobs.append(transformed)
     
-    #save new jobs in batch
-    repository.batch_create([LambdaJobSchema(**job) for job in transformed_jobs])
-    print(f"Saved {len(transformed_jobs)} new jobs to the database.")
+    # validate + save new jobs in batch
+    valid_jobs: list[LambdaJobSchema] = []
+    invalid_count = 0
+    for job in transformed_jobs:
+        try:
+            valid_jobs.append(LambdaJobSchema(**job))
+        except ValidationError:
+            invalid_count += 1
+            logger.exception("Skipping invalid Lambda job payload: %s", job.get("id"))
+
+    inserted = 0
+    if valid_jobs:
+        inserted_rows = repository.batch_create(valid_jobs)
+        inserted = len(inserted_rows)
+
+    result = {
+        "fetched": len(result_jobs),
+        "new": len(jobs_to_fetch),
+        "inserted": inserted,
+        "invalid": invalid_count,
+    }
+    logger.info("Lambda sync result: %s", result)
+    return result

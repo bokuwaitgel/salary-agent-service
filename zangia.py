@@ -1,4 +1,4 @@
-from src.service.zangia import get_all_data_and_save
+from src.service.zangia import ZangiaService
 from src.dependencies import get_zangia_sqlalchemy_repository, get_classifier_output_repository
 from src.repositories.database import ZangiaJobRepository, JobClassificationOutputRepository
 
@@ -25,7 +25,7 @@ def test_get_all_data_and_save():
     Test fetching all job listings from Zangia API and saving them to the database.
     """
     repository: ZangiaJobRepository = dep
-    get_all_data_and_save(repository)
+    ZangiaService(repository).gather_and_save()
 
 async def main():
     #get all data from database

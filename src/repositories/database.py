@@ -8,9 +8,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from schemas.database.zangia_jobs import ZangiaJobTable
-from schemas.database.lambda_jobs import LambdaJobTable, LambdaJobTable_before
+from schemas.database.lambda_jobs import LambdaJobTable
 from schemas.database.base_classifier_db import JobClassificationOutputTable
 from schemas.database.salary_calculation_db import SalaryCalculationOutputTable
+from schemas.database.user import UserTable
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,45 @@ class SalaryCalculationOutputRepository(DatabaseRepository):
 
     def delete(self, record_id: int) -> None:
         db_obj = self.get_by_id(record_id)
+        self.db_session.delete(db_obj)
+        self.db_session.commit()
+
+
+class UserRepository(DatabaseRepository):
+    def get_by_id(self, record_id: str) -> Optional[UserTable]:
+        return self.db_session.query(UserTable).filter(UserTable.id == record_id).first()
+
+    def get_by_email(self, email: str) -> Optional[UserTable]:
+        return self.db_session.query(UserTable).filter(UserTable.email == email).first()
+
+    def get_all(self) -> List[UserTable]:
+        return self.db_session.query(UserTable).all()
+
+    def create(self, obj_in: dict) -> UserTable:
+        db_obj = UserTable(**obj_in)
+        self.db_session.add(db_obj)
+        self.db_session.commit()
+        self.db_session.refresh(db_obj)
+        return db_obj
+
+    def update(self, record_id: str, obj_in: dict) -> Optional[UserTable]:
+        db_obj = self.get_by_id(record_id)
+        if not db_obj:
+            return None
+
+        for field, value in obj_in.items():
+            if hasattr(db_obj, field):
+                setattr(db_obj, field, value)
+
+        self.db_session.commit()
+        self.db_session.refresh(db_obj)
+        return db_obj
+
+    def delete(self, record_id: str) -> None:
+        db_obj = self.get_by_id(record_id)
+        if not db_obj:
+            return
+
         self.db_session.delete(db_obj)
         self.db_session.commit()
 

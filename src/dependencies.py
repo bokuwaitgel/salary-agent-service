@@ -12,10 +12,12 @@ from schemas.database.zangia_jobs import Base as ZangiaBase
 from schemas.database.lambda_jobs import Base as LambdaBase
 from schemas.database.base_classifier_db import Base as ClassifierBase
 from schemas.database.salary_calculation_db import Base as SalaryCalculationBase
+from schemas.database.user import Base as UserBase
 from src.repositories.database import (
     JobClassificationOutputRepository,
     LambdaJobRepository,
     SalaryCalculationOutputRepository,
+    UserRepository,
     ZangiaJobRepository,
 )
 
@@ -88,3 +90,9 @@ def get_salary_calculation_output_repository() -> SalaryCalculationOutputReposit
     """Get repository for salary calculation output."""
     _ensure_tables(SalaryCalculationBase, "salary_calc")
     return SalaryCalculationOutputRepository(_get_session_factory()())
+
+
+def get_user_repository() -> UserRepository:
+    """Get repository for user/auth records."""
+    _ensure_tables(UserBase, "users")
+    return UserRepository(_get_session_factory()())

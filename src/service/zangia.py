@@ -1,12 +1,11 @@
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence
 
 import requests
-from typing import Any, Dict, Iterable, Optional, List, Sequence
-import json
-from datetime import datetime, timezone
-
-from typing import List
 from pydantic import BaseModel
-from schemas.database.zangia_jobs import ZangiaJobSchema
+
+from schemas.database.zangia_jobs import ZangiaJobSchema, ZangiaJobTable
+from src.logger import logger
 from src.repositories.database import ZangiaJobRepository
 
 class ZangiaDBService:
@@ -15,6 +14,9 @@ class ZangiaDBService:
 
     def get_job_by_id(self, job_id: str) -> Optional[BaseModel]:
         return self.repository.get_by_id(job_id)
+    
+    def get_jobs_by_query(self, query: Any) -> Sequence[BaseModel]:
+        return self.repository.get_query(query)
 
     def get_all_jobs(self) -> List[Any]:
         return self.repository.get_all()
@@ -35,141 +37,212 @@ class ZangiaDBService:
 
 #https://new-api.zangia.mn/api/jobs/search?limit=250&timetypeId%5B%5D=1&addrId%5B%5D=1&postDate=4&time=1
 URL = "https://new-api.zangia.mn/api/jobs/search"
+DEFAULT_TIMEOUT = 30
 
-def fetch_job_listings(
+class ZangiaService:
+    def __init__(self, repository: ZangiaJobRepository, timeout: int = DEFAULT_TIMEOUT):
+        self.db_service = ZangiaDBService(repository)
+        self.repository = repository
+        self.url = URL
+        self.timeout = timeout
+
+    @staticmethod
+    def _to_optional_str(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text else None
+
+    def _extract_data_from_list(self, input_list: List[dict]) -> List[Dict[str, Any]]:
+        """Extract specific fields from a list of job dictionaries."""
+        extracted_info: List[Dict[str, Any]] = []
+
+        for item in input_list:
+            time_value = item.get("time")
+            if time_value:
+                start_on = datetime.fromtimestamp(time_value, tz=timezone.utc)
+            else:
+                start_on = datetime.now(timezone.utc)
+
+            dict_item = {
+                "code": self._to_optional_str(item.get("code")),
+                "address": self._to_optional_str(item.get("address")),
+                "age_requires": self._to_optional_str(item.get("age_requires")),
+                "company_name": self._to_optional_str(item.get("company_name")),
+                "company_name_en": self._to_optional_str(item.get("company_name_en")),
+                "company_id": self._to_optional_str(item.get("company_id")),
+                "job_level": item.get("job_level"),
+                "job_level_id": item.get("job_level_id"),
+                "salary_min": item.get("salary_min"),
+                "salary_max": item.get("salary_max"),
+                "search_additional": self._to_optional_str(item.get("search_additional")),
+                "search_description": self._to_optional_str(item.get("search_description")),
+                "search_main": self._to_optional_str(item.get("search_main")),
+                "search_requirements": self._to_optional_str(item.get("search_requirements")),
+                "timetype": self._to_optional_str(item.get("timetype")),
+                "is_active": True,
+                "start_on": start_on,
+                "title": self._to_optional_str(item.get("title")),
+            }
+            extracted_info.append(dict_item)
+
+        return extracted_info
+
+    def fetch_jobs(
+        self,
         page: int = 1,
-        limit: int =250
-):
-    """Fetch job listings from Zangia API with pagination."""
-    params = {
-        "limit": limit,
-        "page": page,
-        "postDate": 3,  # Last 7 days
-        "time": 1,       # Full-time jobs
-        "timetypeId[]": 1,  # Permanent jobs
-        "addrId[]": 1       # Ulaanbaatar
-    }
-    response = requests.get(URL, params=params)
-    if response.status_code == 200:
-        job_data = response.json()
-        return job_data
-    else:
-        print(f"Failed to fetch data: {response.status_code}")
-        return None
-
-def extract_data_from_list(input_list : List[dict]):
-    """Extract specific fields from a list of job dictionaries."""
-    extracted_info = []
-    for item in input_list:
-        dict_item = {
-            "code": item.get("code"),
-            "company_name": item.get("company_name"),
-            "company_name_en": item.get("company_name_en"),
-            "job_level": item.get("job_level"),
-            "job_level_id": item.get("job_level_id"),
-            "salary_min": item.get("salary_min"),
-            "salary_max": item.get("salary_max"),
-            "search_additional": item.get("search_additional"),
-            "search_description": item.get("search_description"),
-            "search_main": item.get("search_main"),
-            "search_requirements": item.get("search_requirements"),
-            "timetype": item.get("timetype"),
-            "title": item.get("title"),
+        limit: int = 250,
+        post_date: int = 4, # last 30 days
+        time_type: int = 1,
+        timetype_ids: Optional[List[int]] = None,
+        addr_ids: Optional[List[int]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch job listings from Zangia API with pagination."""
+        params = {
+            "limit": limit,
+            "page": page,
+            "postDate": post_date,
+            "time": time_type,
+            "timetypeId[]": timetype_ids or [1],
+            "addrId[]": addr_ids or [1],
         }
 
-        extracted_info.append(dict_item)
+        try:
+            response = requests.get(self.url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException:
+            logger.exception("Failed to fetch Zangia jobs page=%s", page)
+            return None
+        except ValueError:
+            logger.exception("Invalid JSON in Zangia response page=%s", page)
+            return None
 
-    return extracted_info
+    def get_jobs_using_api(self, limit: int = 250) -> List[Dict[str, Any]]:
+        """Fetch all pages from Zangia API and return normalized job dictionaries."""
+        first_page = self.fetch_jobs(page=1, limit=limit)
+        if not first_page:
+            return []
 
+        total_pages = int((first_page.get("meta") or {}).get("totalPages", 1) or 1)
+        all_extracted_data: List[Dict[str, Any]] = []
 
-def get_jobs_using_api():
-    """
-    Fetch job listings from Zangia API and return the extracted data.
-    That have pages and total count
-    """
-    #first page that to find total pages, total count
-    jobs = fetch_job_listings()
-    if not jobs:
-        return None
-    meta = jobs.get("meta", {})
-    total_pages = meta.get("totalPages", 1)
-    all_extracted_data = []
-    for page in range(1, total_pages + 1):
-        jobs_page = fetch_job_listings(page=page)
-        if jobs_page:
+        for page in range(1, total_pages + 1):
+            jobs_page = first_page if page == 1 else self.fetch_jobs(page=page, limit=limit)
+            if not jobs_page:
+                continue
+
             items = jobs_page.get("items", [])
-            extracted = extract_data_from_list(items)
-            all_extracted_data.extend(extracted)
+            all_extracted_data.extend(self._extract_data_from_list(items))
 
-    print(f"Total pages to fetch: {total_pages}")
-    
-    # if total pages is 1, we already have the data otherwise we fetched all pages
-    for page in range(2, total_pages + 1):
-        print(f"Fetching page {page} of {total_pages}")
-        jobs_page = fetch_job_listings(page=page)
-        if jobs_page:
-            items = jobs_page.get("items", [])
-            extracted = extract_data_from_list(items)
-            all_extracted_data.extend(extracted)
-
-
-    #change id that year_month_id
-    for job in all_extracted_data:
-        #current year and month
         now = datetime.now(timezone.utc)
-        year = str(now.year)
-        month = f"{now.month:02d}"
-        job["code"] = f"{year}_{month}_{job['code']}"
-        job["year"] = year
-        job["month"] = month
+        current_year = str(now.year)
+        current_month = f"{now.month:02d}"
+        for job in all_extracted_data:
+            job["year"] = current_year
+            job["month"] = current_month
 
-    return all_extracted_data
+        logger.info(
+            "Zangia fetched %s jobs from %s pages",
+            len(all_extracted_data),
+            total_pages,
+        )
+        return all_extracted_data
 
-def get_all_data_and_save(repository: ZangiaJobRepository):
-    """
-    Fetch all job listings from Zangia API and save them to the database.
-    """
-    all_jobs = get_jobs_using_api()
-    if not all_jobs:
-        print("No jobs fetched from API.")
-        return
-    
+    def gather_and_save(self, limit: int = 250) -> Dict[str, int]:
+        """Fetch all jobs from API and persist only new records."""
+        all_jobs = self.get_jobs_using_api(limit=limit)
+        if not all_jobs:
+            logger.info("No Zangia jobs fetched from API")
+            return {"fetched": 0, "new": 0, "inserted": 0, "duplicates": 0}
 
-    #find existing job codes in the database
-    existing_jobs = repository.get_all()
-    print(f"Existing jobs in DB: {len(existing_jobs)}")
-    existing_job_codes = {job.id for job in existing_jobs}
-    print(f"Existing job codes in DB: {len(existing_job_codes)}")
-    none_existing_jobs = [job for job in all_jobs if job.get("code") not in existing_job_codes]
-    print(f"New jobs to add: {len(none_existing_jobs)}")
-    
-    # Deduplicate within the batch to avoid duplicate key errors
-    seen_codes = set()
-    jobs_to_create = []
-    duplicates_in_batch = 0
-    for job in none_existing_jobs:
-        job_code = job.get("code")
-        if job_code not in seen_codes:
+        existing_jobs = self.repository.get_all()
+        existing_job_ids = {job.id for job in existing_jobs}
+
+        new_jobs = [job for job in all_jobs if job.get("code") not in existing_job_ids]
+
+        seen_codes = set()
+        jobs_to_create: List[BaseModel] = []
+        duplicates_in_batch = 0
+        for job in new_jobs:
+            job_code = job.get("code")
+            if not job_code:
+                continue
+            if job_code in seen_codes:
+                duplicates_in_batch += 1
+                continue
             seen_codes.add(job_code)
-            job_model = ZangiaJobSchema(**job)
-            jobs_to_create.append(job_model)
-        else:
-            duplicates_in_batch += 1
+            jobs_to_create.append(ZangiaJobSchema(**job))
+
+        inserted = 0
+        if jobs_to_create:
+            self.repository.batch_create(jobs_to_create)
+            inserted = len(jobs_to_create)
+
+        result = {
+            "fetched": len(all_jobs),
+            "new": len(new_jobs),
+            "inserted": inserted,
+            "duplicates": duplicates_in_batch,
+        }
+        logger.info("Zangia sync result: %s", result)
+        return result
     
-    print(f"Duplicates found in batch: {duplicates_in_batch}")
-    print(f"Unique jobs to insert: {len(jobs_to_create)}")
-    
-    if jobs_to_create:
-        repository.batch_create(jobs_to_create)
+    def gather_and_save_update(self, limit: int = 250) -> Dict[str, int]:
+        """Fetch all jobs from API and persist new records, update existing ones."""
+        active_jobs = self.repository.get_query(ZangiaJobTable.is_active == True)
+        active_job_ids: set[str] = {str(job.id) for job in active_jobs}
 
-    print(f"Saved {len(none_existing_jobs)} jobs to the database.")
+        all_jobs = self.get_jobs_using_api(limit=limit)
+        if not all_jobs:
+            logger.info("No Zangia jobs fetched from API")
+            return {"fetched": 0, "new": 0, "updated": 0, "duplicates": 0}
 
-    #update other existing jobs
-    # for job in all_jobs:
-    #     if job.get("code") in existing_job_codes:
-    #         job_model = ZangiaJobSchema(**job)
-    #         if job_model.id is not None:
-    #             repository.update(job_model.id, job_model)
+        existing_jobs = self.repository.get_all()
+        existing_jobs_dict = {str(job.id): job for job in existing_jobs}
 
+        new_jobs = []
+        updated_jobs = []
+        duplicates_in_batch = 0
+        seen_codes = set()
 
+        for job in all_jobs:
+            job_code = job.get("code")
+            if not job_code:
+                continue
+            if job_code in seen_codes:
+                duplicates_in_batch += 1
+                continue
+            seen_codes.add(job_code)
 
+            existing_job = existing_jobs_dict.get(job_code)
+            if existing_job:
+                for field, value in job.items():
+                    setattr(existing_job, field, value)
+                updated_jobs.append(existing_job)
+            else:
+                new_jobs.append(ZangiaJobSchema(**job))
+
+        if new_jobs:
+            self.repository.batch_create(new_jobs)
+                
+        jobs = updated_jobs + new_jobs
+        
+        # active_job_ids - new_jobs = un active jobs, so we need to mark them as inactive
+        active_job_codes = {job.code for job in jobs}
+        for job_id in active_job_ids:
+            if job_id not in active_job_codes:
+                job_to_update = existing_jobs_dict.get(job_id)
+                if job_to_update:
+                    setattr(job_to_update, "is_active", False)
+                    self.repository.update(str(job_id), job_to_update)
+                    updated_jobs.append(job_to_update)
+        
+        result = {
+            "fetched": len(all_jobs),
+            "new": len(new_jobs),
+            "updated": len(updated_jobs),
+            "duplicates": duplicates_in_batch,
+        }
+        logger.info("Zangia sync with update result: %s", result)
+        return result

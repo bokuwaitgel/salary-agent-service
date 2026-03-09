@@ -1,7 +1,7 @@
 
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from typing import Any, Dict, List, cast
 from enum import Enum
 import re
@@ -17,6 +17,7 @@ logger.info("Loading API routes...")
 logger.info("Registered endpoints: %s", list(ENDPOINTS.keys()))
 
 load_dotenv()
+
 app = FastAPI(
     title="Salary Agent API service",
     version="1.0.0",
@@ -37,8 +38,12 @@ def _route_tags(name: str) -> List[str | Enum]:
 
 
 def _make_get_dispatch(handler):
-    async def get_dispatch():
-        return await handler({})
+    async def get_dispatch(request: Request):
+        payload: Dict[str, Any] = dict(request.query_params)
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            payload["token"] = auth_header[7:].strip()
+        return await handler(payload)
 
     return get_dispatch
 
