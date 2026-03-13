@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from schemas.base_classifier import (
+    Category,
     JobClassificationPaylabInput,
     JobClassificationPaylabOutput,
     JobClassifierAgent,
@@ -20,7 +21,7 @@ from schemas.base_classifier import (
     EducationLevel,
     JobFunctionCategory,
     JobIndustryCategory,
-    JobTechpackCategory,
+    PositionalCategory,
     UnifiedJobLevelCategory,
 )
 from src.agent.agent import AgentProcessor
@@ -42,55 +43,32 @@ PAYLAB_LIMIT = int(os.getenv("PAYLAB_CLASSIFY_LIMIT", "0"))
 PAYLAB_CONCURRENT_TASKS = max(1, int(os.getenv("PAYLAB_CLASSIFY_CONCURRENCY", "4")))
 
 
-def _normalize_paylab_category(value: Any) -> JobTechpackCategory:
+def _normalize_category(value: Any) -> Optional[Category]:
     raw = str(value or "").strip()
     if not raw:
-        return JobTechpackCategory.OTHER
-
+        return None
     try:
-        return JobTechpackCategory(raw)
+        return Category(raw)
     except ValueError:
         pass
+    by_name = raw.upper().replace(" ", "_").replace(",", "_").replace("&", "_").replace("-", "_")
+    if by_name in Category.__members__:
+        return Category[by_name]
+    return None
 
-    by_name = raw.upper().replace(" ", "_")
-    if by_name in JobTechpackCategory.__members__:
-        return JobTechpackCategory[by_name]
 
-    lowered = raw.lower()
-
-    alias_map: dict[str, JobTechpackCategory] = {
-        "administration": JobTechpackCategory.ADMIN_OFFICER,
-        "information technology": JobTechpackCategory.SOFTWARE_ENGINEER,
-        "technology, development": JobTechpackCategory.SOFTWARE_ENGINEER,
-        "human resources": JobTechpackCategory.HR_OFFICER,
-        "economy, finance, accountancy": JobTechpackCategory.FINANCIAL_ANALYST,
-        "banking": JobTechpackCategory.FINANCIAL_ANALYST,
-        "insurance": JobTechpackCategory.FINANCIAL_ANALYST,
-        "top management": JobTechpackCategory.CEO,
-        "management": JobTechpackCategory.PROJECT_MANAGER,
-        "marketing, advertising, pr": JobTechpackCategory.BUSINESS_DEVELOPMENT_MANAGER,
-    }
-    mapped = alias_map.get(lowered)
-    if mapped:
-        return mapped
-
-    contains_map: list[tuple[str, JobTechpackCategory]] = [
-        ("information technology", JobTechpackCategory.SOFTWARE_ENGINEER),
-        ("technology", JobTechpackCategory.SOFTWARE_ENGINEER),
-        ("telecommunications", JobTechpackCategory.IT_SECURITY_ADMIN),
-        ("finance", JobTechpackCategory.FINANCIAL_ANALYST),
-        ("bank", JobTechpackCategory.FINANCIAL_ANALYST),
-        ("insurance", JobTechpackCategory.FINANCIAL_ANALYST),
-        ("human resources", JobTechpackCategory.HR_OFFICER),
-        ("marketing", JobTechpackCategory.BUSINESS_DEVELOPMENT_MANAGER),
-        ("top management", JobTechpackCategory.CEO),
-        ("management", JobTechpackCategory.PROJECT_MANAGER),
-    ]
-    for keyword, mapped_category in contains_map:
-        if keyword in lowered:
-            return mapped_category
-
-    return JobTechpackCategory.OTHER
+def _normalize_paylab_positional(value: Any) -> Optional[PositionalCategory]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return PositionalCategory(raw)
+    except ValueError:
+        pass
+    by_name = raw.upper().replace(" ", "_").replace(",", "_").replace("&", "_").replace("-", "_")
+    if by_name in PositionalCategory.__members__:
+        return PositionalCategory[by_name]
+    return None
 
 
 def _derive_job_function(category_name: str, title: str) -> JobFunctionCategory:
@@ -233,7 +211,8 @@ def _to_classifier_input(row: dict[str, Any]) -> JobClassificationPaylabInput:
     )
 
     return JobClassificationPaylabInput(
-        category=_normalize_paylab_category(category),
+        category=_normalize_category(category),
+        positional_category=_normalize_paylab_positional(title),
         category_min_salary=row.get("category_min_salary", 0) or 0,
         category_max_salary=row.get("category_max_salary", 0) or 0,
         title=title,
@@ -248,7 +227,7 @@ def _to_output_dict(
     year: str,
     month: str,
 ) -> dict[str, Any]:
-    category = _normalize_paylab_category(row.get("category_name"))
+    category = _normalize_category(row.get("category_name"))
     title = str(row.get("job_title") or "")
     category_name = str(row.get("category_name") or "")
     job_function = _derive_job_function(category_name=category_name, title=title)
@@ -260,7 +239,8 @@ def _to_output_dict(
         "title": title,
         "job_function": job_function,
         "job_industry": job_industry,
-        "job_techpack_category": category,
+        "category": _normalize_category(category_name),
+        "positional_category": _normalize_paylab_positional(title),
         "job_level": job_level,
         "experience_level": ExperienceLevel.INTERMEDIATE,
         "education_level": EducationLevel.BACHELOR,

@@ -5,7 +5,7 @@ from sqlalchemy import Column, String, Float, DateTime, Integer, Text
 from sqlalchemy.ext.declarative import declarative_base
 import json
 
-from schemas.base_classifier import EducationLevel, ExperienceLevel, JobBenefit, JobFunctionCategory, JobIndustryCategory, JobRequirement, JobTechpackCategory, UnifiedJobLevelCategory
+from schemas.base_classifier import Category, EducationLevel, ExperienceLevel, JobBenefit, JobFunctionCategory, JobIndustryCategory, JobRequirement, PositionalCategory, UnifiedJobLevelCategory
 
 Base = declarative_base()
 
@@ -15,7 +15,8 @@ class JobClassificationOutput(BaseModel):
     job_industry: JobIndustryCategory = Field(..., description="Predicted job industry category")
     job_function: JobFunctionCategory = Field(..., description="Predicted job function category")
     job_level: UnifiedJobLevelCategory = Field(..., description="Predicted unified job level category")
-    job_techpack_category: JobTechpackCategory = Field(..., description="Predicted job category based on techpack classification")
+    category: Optional[Category] = Field(None, description="Predicted Paylab industry/sector category")
+    positional_category: Optional[PositionalCategory] = Field(None, description="Predicted Paylab positional/job title category")
     experience_level: ExperienceLevel = Field(..., description="Predicted experience level category")
     education_level: EducationLevel = Field(..., description="Predicted education level category")
     salary_min: int= Field(..., description="Minimum salary in MNT based on classification input or estimation")
@@ -37,7 +38,8 @@ class JobClassificationOutputTable(Base):
     title = Column(String, nullable=False)
     job_function = Column(String, nullable=False)
     job_industry = Column(String, nullable=False)
-    job_techpack_category = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    positional_category = Column(String, nullable=True)
     job_level = Column(String, nullable=False)
     experience_level = Column(String, nullable=False)
     education_level = Column(String, nullable=False)

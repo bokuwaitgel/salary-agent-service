@@ -100,6 +100,8 @@ def _load_group_maps_from_db():
     industry_map = {}
     job_level_map = {}
     techpack_category_map = {}
+    category_map = {}
+    positional_category_map = {}
 
     def _update_bucket(target_map, category, job_payload, source_name):
         if not category:
@@ -144,17 +146,23 @@ def _load_group_maps_from_db():
         )
         job_payload = main_data.model_dump()
         job_payload["source_job"] = source
+        job_payload["category"] = dict_data.get("category")
+        job_payload["positional_category"] = dict_data.get("positional_category")
 
         _update_bucket(function_map, job_function, job_payload, source)
         _update_bucket(industry_map, industry, job_payload, source)
         _update_bucket(job_level_map, dict_data.get("job_level"), job_payload, source)
         _update_bucket(techpack_category_map, dict_data.get("job_techpack_category"), job_payload, source)
+        _update_bucket(category_map, dict_data.get("category"), job_payload, source)
+        _update_bucket(positional_category_map, dict_data.get("positional_category"), job_payload, source)
 
     return {
         "function": function_map,
         "industry": industry_map,
         "job_level": job_level_map,
         "techpack_category": techpack_category_map,
+        "category": category_map,
+        "positional_category": positional_category_map,
     }
 
 
@@ -1409,12 +1417,238 @@ async def techpack_category_salary():
                     repository.create(data_output)
                     print(f"Saved salary analysis for function: {function}, job level: {job_level}, techpack category: {techpack_category}")
     
+async def paylab_salary_by_category(category: str = "", positional_category: str = "") -> List[dict]:
+    """Fetch paylab salary data filtered by Paylab category and/or positional_category."""
+    filters = [
+        (JobClassificationOutputTable.year == str(current_year)),
+        (JobClassificationOutputTable.month == f"{current_month:02d}"),
+        (JobClassificationOutputTable.source_job == "paylab"),
+    ]
+    if category:
+        filters.append(JobClassificationOutputTable.category == category)
+    if positional_category:
+        filters.append(JobClassificationOutputTable.positional_category == positional_category)
+
+    from sqlalchemy import and_
+    datas = classifier_repository.get_by_query(and_(*filters))
+    logger.info(
+        "Paylab data for category='%s' positional_category='%s': %d records",
+        category, positional_category, len(datas),
+    )
+    return [data.__dict__.copy() for data in datas]
+
+
+async def category_salary():
+    """Calculate salary grouped by Paylab Category (industry/sector)."""
+    category_map = _get_group_maps_from_db().get("category", {})
+    for category, details in category_map.items():
+        if not category or str(category).strip().lower() in {"none", "бусад", "other"}:
+            continue
+
+        jobs = details.get("jobs", [])
+        job_inputs = [MainSalaryAgentData(**job) for job in jobs]
+
+        paylab = await paylab_salary_by_category(category=category)
+        paylab_data = _format_paylab_text(paylab)
+
+        additional_data_prep = {**additional_data, "paylab_data": paylab_data}
+
+        salary_input = SalaryAgentInput(
+            title=category,
+            main_data=job_inputs,
+            additional_data=additional_data_prep,
+        )
+        result = await processor.calculate_salary(job_data=salary_input)
+        logger.info("Salary analysis for category: %s", category)
+
+        if result:
+            experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
+            data_output = {
+                "title": category,
+                "reasoning": result.reasoning,
+                "min_salary": result.min_salary,
+                "max_salary": result.max_salary,
+                "average_salary": result.average_salary,
+                "job_count": details.get("count", 0),
+                "zangia_count": details.get("zangia", 0),
+                "lambda_count": details.get("lambda", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
+                "industry": "all",
+                "job_function": "all",
+                "job_level": "all",
+                "techpack_category": "all",
+                "category": category,
+                "positional_category": "all",
+                "type": "category",
+                "year": current_year,
+                "month": current_month,
+            }
+            repository.create(data_output)
+            logger.info("Saved salary analysis for category: %s", category)
+
+    # category x job_level breakdown
+    for category, details in category_map.items():
+        if not category or str(category).strip().lower() in {"none", "бусад", "other"}:
+            continue
+
+        jobs = details.get("jobs", [])
+        cat_job_level_map = {}
+        for job in jobs:
+            job_level = job.get("job_level", "Бусад")
+            cat_job_level_map.setdefault(job_level, []).append(job)
+
+        for job_level, level_jobs in cat_job_level_map.items():
+            if job_level == "Бусад":
+                continue
+
+            job_inputs = [MainSalaryAgentData(**job) for job in level_jobs]
+            paylab = await paylab_salary_by_category(category=category)
+            paylab_data = _format_paylab_text(paylab)
+            additional_data_prep = {**additional_data, "paylab_data": paylab_data}
+
+            salary_input = SalaryAgentInput(
+                title=f"{category} - {job_level}",
+                main_data=job_inputs,
+                additional_data=additional_data_prep,
+            )
+            result = await processor.calculate_salary(job_data=salary_input)
+            logger.info("Salary analysis for category: %s, job_level: %s", category, job_level)
+
+            if result:
+                experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
+                data_output = {
+                    "title": f"{category} - {job_level}",
+                    "reasoning": result.reasoning,
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(level_jobs),
+                    "zangia_count": len([j for j in level_jobs if j.get("source_job") == "zangia"]),
+                    "lambda_count": len([j for j in level_jobs if j.get("source_job") == "lambda"]),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": "all",
+                    "job_function": "all",
+                    "job_level": job_level,
+                    "techpack_category": "all",
+                    "category": category,
+                    "positional_category": "all",
+                    "type": "category_by_job_level",
+                    "year": current_year,
+                    "month": current_month,
+                }
+                repository.create(data_output)
+                logger.info("Saved salary analysis for category: %s, job_level: %s", category, job_level)
+
+
+async def positional_category_salary():
+    """Calculate salary grouped by Paylab PositionalCategory (specific job title)."""
+    positional_map = _get_group_maps_from_db().get("positional_category", {})
+    for positional_category, details in positional_map.items():
+        if not positional_category or str(positional_category).strip().lower() in {"none", "бусад", "other"}:
+            continue
+
+        jobs = details.get("jobs", [])
+        job_inputs = [MainSalaryAgentData(**job) for job in jobs]
+
+        paylab = await paylab_salary_by_category(positional_category=positional_category)
+        paylab_data = _format_paylab_text(paylab)
+        additional_data_prep = {**additional_data, "paylab_data": paylab_data}
+
+        salary_input = SalaryAgentInput(
+            title=positional_category,
+            main_data=job_inputs,
+            additional_data=additional_data_prep,
+        )
+        result = await processor.calculate_salary(job_data=salary_input)
+        logger.info("Salary analysis for positional_category: %s", positional_category)
+
+        if result:
+            experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
+            data_output = {
+                "title": positional_category,
+                "reasoning": result.reasoning,
+                "min_salary": result.min_salary,
+                "max_salary": result.max_salary,
+                "average_salary": result.average_salary,
+                "job_count": details.get("count", 0),
+                "zangia_count": details.get("zangia", 0),
+                "lambda_count": details.get("lambda", 0),
+                "experience_salary_breakdown": experience_salary_breakdown,
+                "industry": "all",
+                "job_function": "all",
+                "job_level": "all",
+                "techpack_category": "all",
+                "category": "all",
+                "positional_category": positional_category,
+                "type": "positional_category",
+                "year": current_year,
+                "month": current_month,
+            }
+            repository.create(data_output)
+            logger.info("Saved salary analysis for positional_category: %s", positional_category)
+
+    # positional_category x job_level breakdown
+    for positional_category, details in positional_map.items():
+        if not positional_category or str(positional_category).strip().lower() in {"none", "бусад", "other"}:
+            continue
+
+        jobs = details.get("jobs", [])
+        pos_job_level_map = {}
+        for job in jobs:
+            job_level = job.get("job_level", "Бусад")
+            pos_job_level_map.setdefault(job_level, []).append(job)
+
+        for job_level, level_jobs in pos_job_level_map.items():
+            if job_level == "Бусад":
+                continue
+
+            job_inputs = [MainSalaryAgentData(**job) for job in level_jobs]
+            paylab = await paylab_salary_by_category(positional_category=positional_category)
+            paylab_data = _format_paylab_text(paylab)
+            additional_data_prep = {**additional_data, "paylab_data": paylab_data}
+
+            salary_input = SalaryAgentInput(
+                title=f"{positional_category} - {job_level}",
+                main_data=job_inputs,
+                additional_data=additional_data_prep,
+            )
+            result = await processor.calculate_salary(job_data=salary_input)
+            logger.info("Salary analysis for positional_category: %s, job_level: %s", positional_category, job_level)
+
+            if result:
+                experience_salary_breakdown = _serialize_experience_breakdown(result.experience_salary_breakdown)
+                data_output = {
+                    "title": f"{positional_category} - {job_level}",
+                    "reasoning": result.reasoning,
+                    "min_salary": result.min_salary,
+                    "max_salary": result.max_salary,
+                    "average_salary": result.average_salary,
+                    "job_count": len(level_jobs),
+                    "zangia_count": len([j for j in level_jobs if j.get("source_job") == "zangia"]),
+                    "lambda_count": len([j for j in level_jobs if j.get("source_job") == "lambda"]),
+                    "experience_salary_breakdown": experience_salary_breakdown,
+                    "industry": "all",
+                    "job_function": "all",
+                    "job_level": job_level,
+                    "techpack_category": "all",
+                    "category": "all",
+                    "positional_category": positional_category,
+                    "type": "positional_category_by_job_level",
+                    "year": current_year,
+                    "month": current_month,
+                }
+                repository.create(data_output)
+                logger.info("Saved salary analysis for positional_category: %s, job_level: %s", positional_category, job_level)
+
+
 async def main():
     """Main function to run all salary calculations sequentially."""
-    # await industry_salary()  
+    # await industry_salary()
     # await functional_salary()
     await job_level_salary()
     await techpack_category_salary()
+    await category_salary()
+    await positional_category_salary()
     # await all_salary()
 
 if __name__ == "__main__":

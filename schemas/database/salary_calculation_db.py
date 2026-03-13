@@ -30,6 +30,8 @@ class SalaryCalculationOutputTable(Base):
     job_function = Column(String, nullable=True)
     job_level = Column(String, nullable=True)
     techpack_category = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    positional_category = Column(String, nullable=True)
     type = Column(String, nullable=True)
     experience_salary_breakdown = Column(String, nullable=True)
     year = Column(Integer, nullable=True)
