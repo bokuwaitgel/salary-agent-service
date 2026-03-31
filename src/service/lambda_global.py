@@ -43,22 +43,36 @@ def extract_jobs_list_from_html(html_content) -> list[dict]:
     
     return jobs
 
-async def fetch_jobs_with_playwright(url: str) -> list[dict]:
+async def fetch_jobs_with_playwright(url: str, max_retries: int = 3) -> list[dict]:
     """Fetch job listings using Playwright and parse them."""
 
-    
+
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         )
         page = await context.new_page()
-        await page.goto(url)
-        await page.wait_for_load_state("networkidle")
+
+        for attempt in range(max_retries):
+            try:
+                await page.goto(url, timeout=60000)
+                await page.wait_for_load_state("domcontentloaded")
+                # Wait for job links to appear in the DOM
+                await page.wait_for_selector("a[href^='/jobs/']", timeout=15000)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning("Attempt %s failed for %s: %s. Retrying...", attempt + 1, url, e)
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    logger.error("All %s attempts failed for %s: %s", max_retries, url, e)
+                    await browser.close()
+                    return []
+
         content = await page.content()
         soup = BeautifulSoup(content, "html.parser")
-        
-        
+
         await browser.close()
 
     return extract_jobs_list_from_html(soup)
