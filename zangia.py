@@ -35,8 +35,9 @@ async def main():
     now_utc = datetime.now(timezone.utc)
     current_year = str(now_utc.year)
     
-    #current month + 1
-    current_month = f"{now_utc.month:02d}"
+    #current month 
+    # current_month = f"{now_utc.month:02d}"
+    current_month = "03"    
 
     datas = repository.get_query(
         (ZangiaJobTable.year == current_year) & (ZangiaJobTable.month == current_month)
@@ -58,7 +59,7 @@ async def main():
     prepared_data = []
     #ignore first 400 data for now, because I already classified them and saved into database
 
-    for data in datas[2600:]:
+    for data in datas[100:]:
         dict_data = data.__dict__
         classification_input = JobClassificationInput(
             job_title=dict_data.get("title", ""),
@@ -75,15 +76,16 @@ async def main():
         )
         prepared_data.append((classification_input, dict_data.get("id")))
 
+    prepared_data = prepared_data[:100]
     #classify data batch that 100 by 100 and save result into database
-    batch_size = 300
+    batch_size = 100
     counter = 0
     for i in range(0, len(prepared_data), batch_size):
         batch = prepared_data[i:i+batch_size]
         # 4 time parallel request with 50 batch size each
         tasks = []
-        for j in range(0, len(batch), batch_size//6):
-            sub_batch = batch[j:j+(batch_size//6)]
+        for j in range(0, len(batch), batch_size//10):
+            sub_batch = batch[j:j+(batch_size//10)]
             tasks.append(asyncio.create_task(processor.process_batch([item[0] for item in sub_batch])))
         results = await asyncio.gather(*tasks)
         result = []
@@ -102,7 +104,8 @@ async def main():
                 "title": output.title,
                 "job_function": output.job_function,
                 "job_industry": output.job_industry,
-                "job_techpack_category": output.job_techpack_category,
+                "category": output.category,
+                "positional_category": output.positional_category,
                 "job_level": output.job_level,
                 "experience_level": output.experience_level,
                 "salary_min": output.salary_min,

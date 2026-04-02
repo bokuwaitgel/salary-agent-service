@@ -29,7 +29,7 @@ async def main():
     repository: LambdaJobRepository = dep
     classifier_output_repository: JobClassificationOutputRepository = dep_classifier_output
     current_year = "2026"
-    current_month = "02"
+    current_month = "03"
     datas = repository.get_by_query(
         (LambdaJobTable.year == current_year) & (LambdaJobTable.month == current_month)
     )
@@ -37,7 +37,7 @@ async def main():
     print(f"Total jobs in database: {len(datas)}")
     #prepare data for classification
     classification_input = []
-    for data in datas[300:]:
+    for data in datas[:100]:
         dict_data = data.__dict__
         classification_input.append((
             JobClassificationInput(
@@ -48,8 +48,8 @@ async def main():
             salary_min=dict_data.get("salary_min", None),
             additional_info={
                 "responsibilities": md(dict_data.get("responsibilities", "")),
-                "skills": ", ".join(dict_data.get("skills", [])),
-                "tags": ", ".join(dict_data.get("tags", [])),
+                "skills": ", ".join(dict_data.get("skills") or []),
+                "tags": ", ".join(dict_data.get("tags") or []),
                 "recruiter_industry": dict_data.get("recruiter_industry", ""),
             }
         ), dict_data.get("id")

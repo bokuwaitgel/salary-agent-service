@@ -4,6 +4,7 @@ import json
 import re
 import asyncio
 from enum import Enum
+from functools import lru_cache
 from typing import Any, List, Optional, cast
 
 from pydantic import BaseModel, Field
@@ -21,59 +22,61 @@ class UnifiedJobLevelCategory(str, Enum):
     SPECIALIST = "Мэргэжилтэн"  # Specialists
     STAFF = "Ажилтан"  # General Staff
 
-    @property
-    def description(self) -> str:
-        descriptions = {
-            UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT: 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _descriptions(cls) -> dict[UnifiedJobLevelCategory, str]:
+        return {
+            cls.EXECUTIVE_MANAGEMENT:
                 "Top executive leadership (CEO, Deputy Directors, C-suite). Job grades 10-11. "
                 "Responsible for overall organizational strategy, board-level decisions, and company-wide management. "
                 "Requires 15+ years experience with proven executive track record.",
-            
-            UnifiedJobLevelCategory.SENIOR_MANAGEMENT: 
+            cls.SENIOR_MANAGEMENT:
                 "Senior leadership roles (Directors, Functional Heads). Job grades 8-9. "
                 "Manages multiple departments or major functions, sets strategic direction within domain, "
                 "develops senior managers. Requires 10-15 years experience.",
-            
-            UnifiedJobLevelCategory.MIDDLE_MANAGEMENT:
+            cls.MIDDLE_MANAGEMENT:
                 "Senior management (Senior Managers, Department Heads). Job grades 7-8. "
                 "Manages multiple teams/departments, tactical execution, budget oversight. "
                 "Requires 7-12 years experience with leadership capabilities.",
-
-            UnifiedJobLevelCategory.MANAGER:
+            cls.MANAGER:
                 "Mid-level management (Managers, Team Leads, Supervisors). Job grades 6-7. "
                 "Manages teams, day-to-day execution, people management. "
                 "Requires 4-8 years experience with leadership capabilities.",
-
-            UnifiedJobLevelCategory.SPECIALIST_SENIOR:
+            cls.SPECIALIST_SENIOR:
                 "Senior professional specialists with advanced expertise. Job grades 5-6. "
                 "Subject matter experts, complex problem solving, mentoring, project leadership. "
                 "Requires 6-10 years specialized experience.",
-            
-            UnifiedJobLevelCategory.SPECIALIST: 
+            cls.SPECIALIST:
                 "Professional specialists with domain expertise. Job grades 3-4. "
                 "Independent professional work, specialized skills, moderate complexity tasks. "
                 "Requires 2-6 years experience with university degree.",
-            
-            UnifiedJobLevelCategory.STAFF: 
+            cls.STAFF:
                 "Entry to junior level staff positions. Job grades 1-2. "
                 "Operational tasks, foundational work, learning and executing procedures. "
-                "Requires 0-3 years experience."
+                "Requires 0-3 years experience.",
         }
-        return descriptions.get(self, self.value)
+
+    @property
+    def description(self) -> str:
+        return self._descriptions().get(self, self.value)
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _multipliers(cls) -> dict[UnifiedJobLevelCategory, float]:
+        return {
+            cls.EXECUTIVE_MANAGEMENT: 3.5,
+            cls.SENIOR_MANAGEMENT: 2.5,
+            cls.MIDDLE_MANAGEMENT: 2.0,
+            cls.MANAGER: 1.8,
+            cls.SPECIALIST_SENIOR: 1.5,
+            cls.SPECIALIST: 1.0,
+            cls.STAFF: 0.6,
+        }
 
     @property
     def salary_multiplier(self) -> float:
         """Salary multiplier relative to base specialist level."""
-        multipliers = {
-            UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT: 3.5,
-            UnifiedJobLevelCategory.SENIOR_MANAGEMENT: 2.5,
-            UnifiedJobLevelCategory.MIDDLE_MANAGEMENT: 2.0,
-            UnifiedJobLevelCategory.MANAGER: 1.8,
-            UnifiedJobLevelCategory.SPECIALIST_SENIOR: 1.5,
-            UnifiedJobLevelCategory.SPECIALIST: 1.0,
-            UnifiedJobLevelCategory.STAFF: 0.6
-        }
-        return multipliers.get(self, 1.0)
+        return self._multipliers().get(self, 1.0)
 
 class ExperienceLevel(str, Enum):
     """Experience level categories. as 0-36month, 37-84month, 85+ month"""
@@ -81,23 +84,23 @@ class ExperienceLevel(str, Enum):
     INTERMEDIATE = "37-84"
     EXPERT = "85+"
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _ranges(cls) -> dict[ExperienceLevel, tuple[int, int]]:
+        return {cls.ENTRY: (0, 36), cls.INTERMEDIATE: (37, 84), cls.EXPERT: (85, 1000)}
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _multipliers(cls) -> dict[ExperienceLevel, float]:
+        return {cls.ENTRY: 0.7, cls.INTERMEDIATE: 1.0, cls.EXPERT: 1.6}
+
     @property
     def years_range(self) -> tuple[int, int]:
-        ranges = {
-            ExperienceLevel.ENTRY: (0, 36),
-            ExperienceLevel.INTERMEDIATE: (37, 84),
-            ExperienceLevel.EXPERT: (85, 1000)
-        }
-        return ranges.get(self, (0, 2))
+        return self._ranges().get(self, (0, 2))
 
     @property
     def salary_multiplier(self) -> float:
-        multipliers = {
-            ExperienceLevel.ENTRY: 0.7,
-            ExperienceLevel.INTERMEDIATE: 1.0,
-            ExperienceLevel.EXPERT: 1.6
-        }
-        return multipliers.get(self, 1.0)
+        return self._multipliers().get(self, 1.0)
 
 class EducationLevel(str, Enum):
     """Education level categories."""
@@ -107,16 +110,14 @@ class EducationLevel(str, Enum):
     MASTER = "Магистр"
     DOCTORATE = "Доктор"
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _multipliers(cls) -> dict[EducationLevel, float]:
+        return {cls.HIGH_SCHOOL: 0.8, cls.VOCATIONAL: 0.9, cls.BACHELOR: 1.0, cls.MASTER: 1.2, cls.DOCTORATE: 1.4}
+
     @property
     def salary_multiplier(self) -> float:
-        multipliers = {
-            EducationLevel.HIGH_SCHOOL: 0.8,
-            EducationLevel.VOCATIONAL: 0.9,
-            EducationLevel.BACHELOR: 1.0,
-            EducationLevel.MASTER: 1.2,
-            EducationLevel.DOCTORATE: 1.4
-        }
-        return multipliers.get(self, 1.0)
+        return self._multipliers().get(self, 1.0)
 
 class JobRequirement(BaseModel):
     """Requirements for a job position."""
@@ -155,34 +156,38 @@ class JobFunctionCategory(str, Enum):
     HEALTHCARE = "Эрүүл мэнд/эмнэлэг"
     OTHER = "Бусад"
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _descriptions(cls) -> dict[JobFunctionCategory, str]:
+        return {
+            cls.STORAGE: "Warehouse and storage operations including inventory management, logistics coordination, and materials handling.",
+            cls.AUDIT_RISK_COMPLIANCE: "Internal and external audit functions, enterprise risk management, and regulatory compliance activities.",
+            cls.SALES: "Direct sales roles focused on revenue generation, client acquisition, and account management across various industries.",
+            cls.BUSINESS_DEVELOPMENT: "Strategic growth initiatives including partnership development, market expansion, and new business opportunities.",
+            cls.EXECUTIVE_MANAGEMENT: "C-suite and senior leadership positions responsible for overall organizational strategy and direction.",
+            cls.ADMINISTRATION: "Administrative support and office management functions ensuring smooth operational workflows.",
+            cls.ENGINEERING_TECHNICAL: "Technical and engineering roles involving design, maintenance, and operation of equipment and systems.",
+            cls.CONTENT_DESIGN: "Creative roles in content creation, graphic design, multimedia production, and visual communications.",
+            cls.MARKETING_PR: "Marketing strategy, brand management, public relations, and communications activities.",
+            cls.IT_TELECOM: "Information technology and telecommunications roles including software development, infrastructure, and systems administration.",
+            cls.FINANCE_ACCOUNTING: "Financial planning, accounting, investment management, and related financial services.",
+            cls.PROJECT_ALL: "Project management and coordination roles across all industries and project types.",
+            cls.DISTRIBUTION_TRANSPORT: "Transportation, logistics, and distribution activities for goods and materials.",
+            cls.MANUFACTURING: "Production and manufacturing operations including assembly, quality control, and process management.",
+            cls.SERVICE_CLEANING: "Service industry roles including cleaning, maintenance, and facility management.",
+            cls.HSE_BO: "Health, safety, environment, and business operations management ensuring workplace safety and regulatory compliance.",
+            cls.CUSTOMER_SERVICE: "Customer-facing support roles focused on client satisfaction and issue resolution.",
+            cls.SECURITY: "Security and protection services including physical security, surveillance, and risk mitigation.",
+            cls.PROCUREMENT: "Purchasing, vendor management, and supply chain procurement activities.",
+            cls.HR: "Human resources functions including recruitment, employee relations, compensation, and organizational development.",
+            cls.LEGAL: "Legal counsel, contract management, and regulatory compliance activities.",
+            cls.HEALTHCARE: "Healthcare and medical services including clinical, administrative, and support roles.",
+            cls.OTHER: "Roles that do not fit into the predefined categories, encompassing a wide range of job functions across various industries.",
+        }
+
     @property
     def description(self) -> str:
-        descriptions = {
-            JobFunctionCategory.STORAGE: "Warehouse and storage operations including inventory management, logistics coordination, and materials handling.",
-            JobFunctionCategory.AUDIT_RISK_COMPLIANCE: "Internal and external audit functions, enterprise risk management, and regulatory compliance activities.",
-            JobFunctionCategory.SALES: "Direct sales roles focused on revenue generation, client acquisition, and account management across various industries.",
-            JobFunctionCategory.BUSINESS_DEVELOPMENT: "Strategic growth initiatives including partnership development, market expansion, and new business opportunities.",
-            JobFunctionCategory.EXECUTIVE_MANAGEMENT: "C-suite and senior leadership positions responsible for overall organizational strategy and direction.",
-            JobFunctionCategory.ADMINISTRATION: "Administrative support and office management functions ensuring smooth operational workflows.",
-            JobFunctionCategory.ENGINEERING_TECHNICAL: "Technical and engineering roles involving design, maintenance, and operation of equipment and systems.",
-            JobFunctionCategory.CONTENT_DESIGN: "Creative roles in content creation, graphic design, multimedia production, and visual communications.",
-            JobFunctionCategory.MARKETING_PR: "Marketing strategy, brand management, public relations, and communications activities.",
-            JobFunctionCategory.IT_TELECOM: "Information technology and telecommunications roles including software development, infrastructure, and systems administration.",
-            JobFunctionCategory.FINANCE_ACCOUNTING: "Financial planning, accounting, investment management, and related financial services.",
-            JobFunctionCategory.PROJECT_ALL: "Project management and coordination roles across all industries and project types.",
-            JobFunctionCategory.DISTRIBUTION_TRANSPORT: "Transportation, logistics, and distribution activities for goods and materials.",
-            JobFunctionCategory.MANUFACTURING: "Production and manufacturing operations including assembly, quality control, and process management.",
-            JobFunctionCategory.SERVICE_CLEANING: "Service industry roles including cleaning, maintenance, and facility management.",
-            JobFunctionCategory.HSE_BO: "Health, safety, environment, and business operations management ensuring workplace safety and regulatory compliance.",
-            JobFunctionCategory.CUSTOMER_SERVICE: "Customer-facing support roles focused on client satisfaction and issue resolution.",
-            JobFunctionCategory.SECURITY: "Security and protection services including physical security, surveillance, and risk mitigation.",
-            JobFunctionCategory.PROCUREMENT: "Purchasing, vendor management, and supply chain procurement activities.",
-            JobFunctionCategory.HR: "Human resources functions including recruitment, employee relations, compensation, and organizational development.",
-            JobFunctionCategory.LEGAL: "Legal counsel, contract management, and regulatory compliance activities.",
-            JobFunctionCategory.HEALTHCARE: "Healthcare and medical services including clinical, administrative, and support roles.",
-            JobFunctionCategory.OTHER: "Roles that do not fit into the predefined categories, encompassing a wide range of job functions across various industries."   
-        }
-        return descriptions.get(self, self.value)
+        return self._descriptions().get(self, self.value)
 
 class JobIndustryCategory(str, Enum):
     AGRICULTURE_FORESTRY_FISHING_HUNTING = "Хөдөө_аж_ахуй_ойн_аж_ахуй_загас_барилт_ан_агнуур"
@@ -207,34 +212,37 @@ class JobIndustryCategory(str, Enum):
     HOUSEHOLD_EMPLOYERS = "Хүн хөлслөн ажиллуулдаг өрхийн үйл ажиллагаа, өрхийн өөрийн хэрэглээнд зориулан үйлдвэрлэсэн нэр төрлөөр нь тодорхойлох боломжгүй бүтээгдэхүүн үйлчилгээ"
     INTERNATIONAL_ORGANIZATION_DIPLOMATIC_SERVICES = "Олон улсын байгууллага, суурин төлөөлөгчийн үйл ажиллагаа"
     OTHER = "Бусад"
-    @property
-    def description(self) -> str:
-        descriptions = {
-            JobIndustryCategory.AGRICULTURE_FORESTRY_FISHING_HUNTING: "Agriculture, forestry, fishing, and hunting industry including crop production, animal production, forestry, fishing, and related activities.",
-            JobIndustryCategory.MINING_QUARRYING_OIL_GAS_EXTRACTION: "Mining and extraction of minerals, oil, gas, and other natural resources.",
-            JobIndustryCategory.MANUFACTURING: "Manufacturing of goods across various sectors including food production, textiles, machinery, and more.",
-            JobIndustryCategory.ELECTRICITY_GAS_STEAM_AIR_CONDITIONING_SUPPLY: "Generation and distribution of electricity, gas, steam, and air conditioning supply.",
-            JobIndustryCategory.WATER_SEWERAGE_WASTE_MANAGEMENT_REMEDIATION: "Water supply and sewage systems, waste management services, and environmental remediation activities.",
-            JobIndustryCategory.CONSTRUCTION: "Construction of buildings, infrastructure projects, and related activities.",
-            JobIndustryCategory.WHOLESALE_RETAIL_TRADE_REPAIR_MOTOR_VEHICLES_MOTORCYCLES: "Wholesale and retail trade of motor vehicles and motorcycles including repair services.",
-            JobIndustryCategory.TRANSPORTATION_WAREHOUSING: "Transportation of goods and passengers as well as warehousing and storage services.",
-            JobIndustryCategory.ACCOMMODATION_FOOD_SERVICES: "Accommodation services such as hotels and food services including restaurants and catering.",
-            JobIndustryCategory.INFORMATION_COMMUNICATION: "Information technology services, telecommunications, and related communication services.",
-            JobIndustryCategory.FINANCE_INSURANCE: "Financial services including banking, insurance, investment management, and related activities.",
-            JobIndustryCategory.REAL_ESTATE_RENTAL_LEASING: "Real estate activities including rental and leasing of properties.",
-            JobIndustryCategory.PROFESSIONAL_SCIENTIFIC_TECHNICAL_SERVICES: "Professional services in scientific research, technical consulting, legal advice, accounting, and similar fields.",
-            JobIndustryCategory.MANAGEMENT_SUPPORT_WASTE_MANAGEMENT_REMIDIATION_SERVICES: "Management support services including administrative support, waste management services, and remediation services.",
-            JobIndustryCategory.PUBLIC_ADMINISTRATION_DEFENSE_SOCIAL_SECURITY: "Public administration including government services, defense activities, social security administration.",
-            JobIndustryCategory.EDUCATION: "Educational services including schools, universities, training centers.",
-            JobIndustryCategory.HEALTHCARE_SOCIAL_ASSISTANCE: "Healthcare services including hospitals, clinics, social assistance services.",
-            JobIndustryCategory.ARTS_ENTERTAINMENT_RECREATION: "Arts, entertainment, and recreation services including performing arts, spectator sports, museums, and amusement parks.",
-            JobIndustryCategory.OTHER_SERVICES: "Other services not classified in the above categories including repair and maintenance services, personal services, and similar activities.",
-            JobIndustryCategory.HOUSEHOLD_EMPLOYERS: "Household employers including domestic workers, nannies, housekeepers, and similar roles.",
-            JobIndustryCategory.INTERNATIONAL_ORGANIZATION_DIPLOMATIC_SERVICES: "International organizations and diplomatic services including roles in embassies, consulates, international agencies, and similar entities.",
-            JobIndustryCategory.OTHER: "Other categories not specifically listed." 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _descriptions(cls) -> dict[JobIndustryCategory, str]:
+        return {
+            cls.AGRICULTURE_FORESTRY_FISHING_HUNTING: "Agriculture, forestry, fishing, and hunting industry including crop production, animal production, forestry, fishing, and related activities.",
+            cls.MINING_QUARRYING_OIL_GAS_EXTRACTION: "Mining and extraction of minerals, oil, gas, and other natural resources.",
+            cls.MANUFACTURING: "Manufacturing of goods across various sectors including food production, textiles, machinery, and more.",
+            cls.ELECTRICITY_GAS_STEAM_AIR_CONDITIONING_SUPPLY: "Generation and distribution of electricity, gas, steam, and air conditioning supply.",
+            cls.WATER_SEWERAGE_WASTE_MANAGEMENT_REMEDIATION: "Water supply and sewage systems, waste management services, and environmental remediation activities.",
+            cls.CONSTRUCTION: "Construction of buildings, infrastructure projects, and related activities.",
+            cls.WHOLESALE_RETAIL_TRADE_REPAIR_MOTOR_VEHICLES_MOTORCYCLES: "Wholesale and retail trade of motor vehicles and motorcycles including repair services.",
+            cls.TRANSPORTATION_WAREHOUSING: "Transportation of goods and passengers as well as warehousing and storage services.",
+            cls.ACCOMMODATION_FOOD_SERVICES: "Accommodation services such as hotels and food services including restaurants and catering.",
+            cls.INFORMATION_COMMUNICATION: "Information technology services, telecommunications, and related communication services.",
+            cls.FINANCE_INSURANCE: "Financial services including banking, insurance, investment management, and related activities.",
+            cls.REAL_ESTATE_RENTAL_LEASING: "Real estate activities including rental and leasing of properties.",
+            cls.PROFESSIONAL_SCIENTIFIC_TECHNICAL_SERVICES: "Professional services in scientific research, technical consulting, legal advice, accounting, and similar fields.",
+            cls.MANAGEMENT_SUPPORT_WASTE_MANAGEMENT_REMIDIATION_SERVICES: "Management support services including administrative support, waste management services, and remediation services.",
+            cls.PUBLIC_ADMINISTRATION_DEFENSE_SOCIAL_SECURITY: "Public administration including government services, defense activities, social security administration.",
+            cls.EDUCATION: "Educational services including schools, universities, training centers.",
+            cls.HEALTHCARE_SOCIAL_ASSISTANCE: "Healthcare services including hospitals, clinics, social assistance services.",
+            cls.ARTS_ENTERTAINMENT_RECREATION: "Arts, entertainment, and recreation services including performing arts, spectator sports, museums, and amusement parks.",
+            cls.OTHER_SERVICES: "Other services not classified in the above categories including repair and maintenance services, personal services, and similar activities.",
+            cls.HOUSEHOLD_EMPLOYERS: "Household employers including domestic workers, nannies, housekeepers, and similar roles.",
+            cls.INTERNATIONAL_ORGANIZATION_DIPLOMATIC_SERVICES: "International organizations and diplomatic services including roles in embassies, consulates, international agencies, and similar entities.",
+            cls.OTHER: "Other categories not specifically listed.",
         }
 
-        return descriptions.get(self, self.value)
+    @property
+    def description(self) -> str:
+        return self._descriptions().get(self, self.value)
 
 
 class Category(str, Enum):
@@ -279,50 +287,54 @@ class Category(str, Enum):
     WATER_MANAGEMENT_FORESTRY_ENVIRONMENT = "Water Management, Forestry, Environment"
     WOOD_PROCESSING_INDUSTRY = "Wood Processing Industry"
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _mongolian_names(cls) -> dict[Category, str]:
+        return {
+            cls.ADMINISTRATION: "Захиргаа",
+            cls.AGRICULTURE_FOOD_INDUSTRY: "Хөдөө аж ахуй, хүнсний үйлдвэр",
+            cls.ARTS_CULTURE: "Урлаг & Соёл",
+            cls.BANKING: "Банк",
+            cls.CAR_INDUSTRY: "Автомашины үйлдвэр",
+            cls.CHEMICAL_INDUSTRY: "Химийн үйлдвэр",
+            cls.COMMERCE: "Худалдаа",
+            cls.CONSTRUCTION_REAL_ESTATE: "Барилга & Үл хөдлөх хөрөнгө",
+            cls.CUSTOMER_SUPPORT: "Үйлчлүүлэгчийн тусламж",
+            cls.ECONOMY_FINANCE_ACCOUNTANCY: "Эдийн засаг, Санхүү, Нягтлан бодох бүртгэл",
+            cls.EDUCATION_SCIENCE_RESEARCH: "Боловсрол, Шинжлэх ухаан & Судалгаа",
+            cls.ELECTRICAL_POWER_ENGINEERING: "Цахилгаан & Эрчим хүчний инженерчлэл",
+            cls.GENERAL_LABOUR: "Ерөнхий хөдөлмөр",
+            cls.HUMAN_RESOURCES: "Хүний нөөц",
+            cls.INFORMATION_TECHNOLOGY: "Мэдээллийн технологи",
+            cls.INSURANCE: "Даатгал",
+            cls.JOURNALISM_PRINTING_ARTS_MEDIA: "Сэтгүүл зүй, Хэвлэх урлаг & Медиа",
+            cls.LAW_LEGISLATION: "Хууль & Хууль тогтоомж",
+            cls.LEASING: "Лизинг",
+            cls.MANAGEMENT: "Менежмент",
+            cls.MARKETING_ADVERTISING_PR: "Маркетинг, Сурталчилгаа, PR",
+            cls.MECHANICAL_ENGINEERING: "Механик инженерчлэл",
+            cls.MEDICINE_SOCIAL_CARE: "Анагаах ухаан & Нийгмийн халамж",
+            cls.MINING_METALLURGY: "Уул уурхай, Металлурги",
+            cls.PHARMACEUTICAL_INDUSTRY: "Эмийн үйлдвэр",
+            cls.PRODUCTION: "Үйлдвэрлэл",
+            cls.PUBLIC_ADMINISTRATION_SELF_GOVERNANCE: "Төрийн захиргаа, Өөрөө удирдах ёс",
+            cls.QUALITY_MANAGEMENT: "Чанарын менежмент",
+            cls.SECURITY_PROTECTION: "Аюулгүй байдал & Хамгаалалт",
+            cls.SERVICE_INDUSTRIES: "Үйлчилгээний салбар",
+            cls.TECHNOLOGY_DEVELOPMENT: "Технологи, Хөгжүүлэлт",
+            cls.TELECOMMUNICATIONS: "Харилцаа холбоо",
+            cls.TEXTILE_LEATHER_APPAREL_INDUSTRY: "Нэхмэл, Арьс шир, Хувцасны үйлдвэр",
+            cls.TOP_MANAGEMENT: "Дээд удирдлага",
+            cls.TOURISM_GASTRONOMY_HOTEL_BUSINESS: "Аялал жуулчлал, Хоол хүнс, Зочид буудлын бизнес",
+            cls.TRANSLATING_INTERPRETING: "Орчуулга, Тайлбарлах",
+            cls.TRANSPORT_HAULAGE_LOGISTICS: "Тээвэр, Ачаа тээвэр, Логистик",
+            cls.WATER_MANAGEMENT_FORESTRY_ENVIRONMENT: "Усны менежмент, Ойн аж ахуй, Байгаль орчин",
+            cls.WOOD_PROCESSING_INDUSTRY: "Модон материал боловсруулах үйлдвэр",
+        }
+
     @property
     def mongolian_name(self) -> str:
-        names = {
-            Category.ADMINISTRATION: "Захиргаа",
-            Category.AGRICULTURE_FOOD_INDUSTRY: "Хөдөө аж ахуй, хүнсний үйлдвэр",
-            Category.ARTS_CULTURE: "Урлаг & Соёл",
-            Category.BANKING: "Банк",
-            Category.CAR_INDUSTRY: "Автомашины үйлдвэр",
-            Category.CHEMICAL_INDUSTRY: "Химийн үйлдвэр",
-            Category.COMMERCE: "Худалдаа",
-            Category.CONSTRUCTION_REAL_ESTATE: "Барилга & Үл хөдлөх хөрөнгө",
-            Category.CUSTOMER_SUPPORT: "Үйлчлүүлэгчийн тусламж",
-            Category.ECONOMY_FINANCE_ACCOUNTANCY: "Эдийн засаг, Санхүү, Нягтлан бодох бүртгэл",
-            Category.EDUCATION_SCIENCE_RESEARCH: "Боловсрол, Шинжлэх ухаан & Судалгаа",
-            Category.ELECTRICAL_POWER_ENGINEERING: "Цахилгаан & Эрчим хүчний инженерчлэл",
-            Category.GENERAL_LABOUR: "Ерөнхий хөдөлмөр",
-            Category.HUMAN_RESOURCES: "Хүний нөөц",
-            Category.INFORMATION_TECHNOLOGY: "Мэдээллийн технологи",
-            Category.INSURANCE: "Даатгал",
-            Category.JOURNALISM_PRINTING_ARTS_MEDIA: "Сэтгүүл зүй, Хэвлэх урлаг & Медиа",
-            Category.LAW_LEGISLATION: "Хууль & Хууль тогтоомж",
-            Category.LEASING: "Лизинг",
-            Category.MANAGEMENT: "Менежмент",
-            Category.MARKETING_ADVERTISING_PR: "Маркетинг, Сурталчилгаа, PR",
-            Category.MECHANICAL_ENGINEERING: "Механик инженерчлэл",
-            Category.MEDICINE_SOCIAL_CARE: "Анагаах ухаан & Нийгмийн халамж",
-            Category.MINING_METALLURGY: "Уул уурхай, Металлурги",
-            Category.PHARMACEUTICAL_INDUSTRY: "Эмийн үйлдвэр",
-            Category.PRODUCTION: "Үйлдвэрлэл",
-            Category.PUBLIC_ADMINISTRATION_SELF_GOVERNANCE: "Төрийн захиргаа, Өөрөө удирдах ёс",
-            Category.QUALITY_MANAGEMENT: "Чанарын менежмент",
-            Category.SECURITY_PROTECTION: "Аюулгүй байдал & Хамгаалалт",
-            Category.SERVICE_INDUSTRIES: "Үйлчилгээний салбар",
-            Category.TECHNOLOGY_DEVELOPMENT: "Технологи, Хөгжүүлэлт",
-            Category.TELECOMMUNICATIONS: "Харилцаа холбоо",
-            Category.TEXTILE_LEATHER_APPAREL_INDUSTRY: "Нэхмэл, Арьс шир, Хувцасны үйлдвэр",
-            Category.TOP_MANAGEMENT: "Дээд удирдлага",
-            Category.TOURISM_GASTRONOMY_HOTEL_BUSINESS: "Аялал жуулчлал, Хоол хүнс, Зочид буудлын бизнес",
-            Category.TRANSLATING_INTERPRETING: "Орчуулга, Тайлбарлах",
-            Category.TRANSPORT_HAULAGE_LOGISTICS: "Тээвэр, Ачаа тээвэр, Логистик",
-            Category.WATER_MANAGEMENT_FORESTRY_ENVIRONMENT: "Усны менежмент, Ойн аж ахуй, Байгаль орчин",
-            Category.WOOD_PROCESSING_INDUSTRY: "Модон материал боловсруулах үйлдвэр",
-        }
-        return names.get(self, self.value)
+        return self._mongolian_names().get(self, self.value)
 
 
 class PositionalCategory(str, Enum):
@@ -1034,717 +1046,721 @@ class PositionalCategory(str, Enum):
     IOS_DEVELOPER = "iOS Developer"
     OTHER = "Other"
 
+    @classmethod
+    @lru_cache(maxsize=1)
+    def _mongolian_names(cls) -> dict[PositionalCategory, str]:
+        return {
+            cls.NET_PROGRAMMER: ".NET программист",
+            cls.ABAP_PROGRAMMER: "ABAP программист",
+            cls.AI_ENGINEER: "Хиймэл оюун ухааны инженер",
+            cls.ASP_NET_PROGRAMMER: "ASP.NET программист",
+            cls.ACCOUNT_DIRECTOR: "Дансны захирал",
+            cls.ACCOUNT_EXECUTIVE: "Дансны гүйцэтгэх ажилтан",
+            cls.ACCOUNT_MANAGER: "Дансны менежер",
+            cls.ACCOUNTANT: "Нягтлан бодогч",
+            cls.ACCOUNTING_CLERK: "Нягтлан бодох бүртгэлийн ажилтан",
+            cls.ACCOUNTING_SERVICE_MANAGER: "Нягтлан бодох бүртгэлийн үйлчилгээний менежер",
+            cls.ACCOMMODATION_MANAGER: "Байрны менежер",
+            cls.ACTOR: "Жүжигчин",
+            cls.ACTIVITY_INSTRUCTOR: "Үйл ажиллагааны зааварлагч",
+            cls.ADMINISTRATIVE_WORKER: "Захиргааны ажилтан",
+            cls.ADMINISTRATIVE_OFFICER: "Захиргааны офицер",
+            cls.AGRICULTURAL_ENGINEER_AGRONOMIST: "Хөдөө аж ахуйн инженер, Агрономч",
+            cls.AGRICULTURAL_EQUIPMENT_OPERATOR: "Хөдөө аж ахуйн тоног төхөөрөмжийн оператор",
+            cls.AGRICULTURAL_SPECIALIST: "Хөдөө аж ахуйн мэргэжилтэн",
+            cls.AGRICULTURAL_TECHNICIAN: "Хөдөө аж ахуйн техникч",
+            cls.AGRICULTURAL_TECHNOLOGIST: "Хөдөө аж ахуйн технологич",
+            cls.AIR_TRAFFIC_CONTROLLER: "Агаарын хөдөлгөөний хяналтын ажилтан",
+            cls.AIRCRAFT_TECHNICIAN: "Нисэх онгоцны техникч",
+            cls.AIRCRAFT_ENGINEER: "Нисэх онгоцны инженер",
+            cls.AMBULANCE_DRIVER: "Түргэн тусламжийн жолооч",
+            cls.AMBULANCE_PARAMEDIC: "Түргэн тусламжийн парамедик",
+            cls.ANESTHETIST: "Мэдээ алдуулагч эмч",
+            cls.ANIMAL_CARE_WORKER: "Амьтны асаргааны ажилтан",
+            cls.ANTI_MONEY_LAUNDERING_SPECIALIST: "Мөнгө угаахтай тэмцэх мэргэжилтэн",
+            cls.ARCHAEOLOGIST: "Археологич",
+            cls.ARCHITECT: "Архитектор",
+            cls.ART_DIRECTOR: "Урлагийн захирал",
+            cls.ARCHIVIST_REGISTRY_ADMINISTRATOR: "Архивч, Бүртгэлийн администратор",
+            cls.ASSISTANT: "Туслах",
+            cls.ASSISTANT_COOK: "Тогооч туслах",
+            cls.ASSISTANT_FINANCIAL_CONTROLLER: "Санхүүгийн хяналтын туслах",
+            cls.ASSISTANT_TEACHER: "Багшийн туслах",
+            cls.ASSISTANT_OF_AUDITOR: "Аудиторын туслах",
+            cls.ASSISTANT_TO_A_TAX_ADVISOR: "Татварын зөвлөхийн туслах",
+            cls.AU_PAIR: "Ау-пэйр",
+            cls.AUDITOR: "Аудитор",
+            cls.AUTO_ELECTRICIAN: "Автомашины цахилгаанч",
+            cls.AUTO_REPAIR_SHOP_MANAGER: "Автомашины засварын газрын менежер",
+            cls.AUTOMATION_ENGINEER: "Автоматжуулалтын инженер",
+            cls.AUTOMATION_PLANNER: "Автоматжуулалтын төлөвлөгч",
+            cls.AXEMAN: "Сүхчин",
+            cls.BACK_OFFICE_SPECIALIST: "Арын оффисын мэргэжилтэн",
+            cls.BAILIFF_ENFORCEMENT_OFFICER: "Шүүхийн биелэлтийн ажилтан",
+            cls.BAKER: "Талхчин",
+            cls.BARTENDER: "Бартендер",
+            cls.BEAUTICIAN: "Гоо сайханч",
+            cls.BETTING_CLERK: "Бооцооны ажилтан",
+            cls.BICYCLE_MECHANIC: "Дугуйн механик",
+            cls.BIDDING_ENGINEER: "Тендерийн инженер",
+            cls.BILLING_CLERK: "Тооцооны ажилтан",
+            cls.BIOLOGIST: "Биологич",
+            cls.BOOKBINDER: "Номын хавтасч",
+            cls.BOOKMAKER: "Бооцооны компанийн ажилтан",
+            cls.BOOKING_AGENT: "Захиалгын агент",
+            cls.BOSUN: "Хөлөг онгоцны ахлагч",
+            cls.BRANCH_DIRECTOR: "Салбарын захирал",
+            cls.BRAND_MANAGER: "Брэндийн менежер",
+            cls.BRICKLAYER: "Тоосгочин",
+            cls.BUILDING_CONTROL_SURVEYOR: "Барилгын хяналтын хэмжигч",
+            cls.BUILDING_TECHNICIAN: "Барилгын техникч",
+            cls.BUS_DRIVER: "Автобусны жолооч",
+            cls.BUSINESS_ANALYST: "Бизнес шинжээч",
+            cls.BUSINESS_DEVELOPMENT_MANAGER: "Бизнесийн хөгжлийн менежер",
+            cls.BUSINESS_GROUP_MANAGER: "Бизнесийн бүлгийн менежер",
+            cls.BUSINESS_INTELLIGENCE_SPECIALIST: "Бизнесийн тагнуулын мэргэжилтэн",
+            cls.BUTCHER: "Махчин",
+            cls.BUYING_AGENT: "Худалдан авалтын агент",
+            cls.C_PROGRAMMER: "C программист",
+            cls.CSHARP_PROGRAMMER: "C# программист",
+            cls.CPP_PROGRAMMER: "C++ программист",
+            cls.CAD_SPECIALIST: "CAD мэргэжилтэн",
+            cls.CNC_MACHINE_SETTER: "CNC машины тохируулагч",
+            cls.CNC_PROGRAMMER: "CNC программист",
+            cls.CRM_SPECIALIST: "CRM мэргэжилтэн",
+            cls.CSR_SPECIALIST: "CSR мэргэжилтэн",
+            cls.CABINET_MAKER: "Тавилгачин",
+            cls.CABLE_CAR_OPERATOR: "Кабины машины оператор",
+            cls.CALL_CENTER_SUPERVISOR: "Дуудлагын төвийн ахлагч",
+            cls.CALL_CENTRE_DIRECTOR: "Дуудлагын төвийн захирал",
+            cls.CALL_CENTRE_MANAGER: "Дуудлагын төвийн менежер",
+            cls.CALL_OPERATOR: "Дуудлагын оператор",
+            cls.CAMERA_OPERATOR: "Камерын оператор",
+            cls.CAR_DRIVER: "Автомашины жолооч",
+            cls.CAR_FLEET_MANAGER: "Автопаркын менежер",
+            cls.CAR_GLASS_FITTER: "Автомашины шилний угсрагч",
+            cls.CAR_MECHANIC: "Автомашины механик",
+            cls.CAR_UPHOLSTERER: "Автомашины эдлэлчин",
+            cls.CAR_WASH_WORKER: "Автомашин угаагч",
+            cls.CAR_SALESMAN: "Автомашины худалдагч",
+            cls.CAREER_ADVISOR: "Карьерын зөвлөх",
+            cls.CAREGIVER: "Асрагч",
+            cls.CARER_PERSONAL_ASSISTANT: "Асрагч, Хувийн туслах",
+            cls.CARPENTER: "Мужаан",
+            cls.CASEWORKER: "Хэргийн ажилтан",
+            cls.CASHIER: "Кассир",
+            cls.CATERING_MANAGER: "Хоолны үйлчилгээний менежер",
+            cls.CHAMBERMAID: "Өрөөний үйлчлэгч",
+            cls.CHARGE_NURSE: "Ахлах сувилагч",
+            cls.CHEMICAL_ENGINEER: "Химийн инженер",
+            cls.CHEMICAL_LAB_TECHNICIAN: "Химийн лабораторийн техникч",
+            cls.CHEMIST: "Химич",
+            cls.CHEF: "Ерөнхий тогооч",
+            cls.CHIEF_ACCOUNTANT: "Ерөнхий нягтлан бодогч",
+            cls.CHIEF_ACCOUNTANT_DEPUTY: "Ерөнхий нягтлан бодогчийн орлогч",
+            cls.CHIEF_ADVISOR: "Ерөнхий зөвлөх",
+            cls.CHIEF_EXECUTIVE_OFFICER: "Гүйцэтгэх захирал",
+            cls.CHIEF_OFFICIAL: "Ерөнхий албан тушаалтан",
+            cls.CHIEF_RECEPTIONIST_OFFICER: "Ерөнхий хүлээн авалтын ажилтан",
+            cls.CHIEF_STATE_ADVISOR: "Улсын ерөнхий зөвлөх",
+            cls.CHIEF_BOROUGH_CONTROLLER: "Дүүргийн ерөнхий хяналтын ажилтан",
+            cls.CHOREOGRAPHER: "Хореограф",
+            cls.CIVIL_ENGINEER: "Иргэний инженер",
+            cls.CLAIMS_ADMINISTRATOR: "Нэхэмжлэлийн администратор",
+            cls.CLAIMS_SPECIALIST: "Нэхэмжлэлийн мэргэжилтэн",
+            cls.CLEANER: "Цэвэрлэгч",
+            cls.CLEANING_MANAGER: "Цэвэрлэгээний менежер",
+            cls.CLIENT_OFFICER: "Үйлчлүүлэгчийн ажилтан",
+            cls.CLINICAL_DATA_MANAGER: "Клиникийн өгөгдлийн менежер",
+            cls.CLINICAL_PSYCHOLOGIST: "Клиникийн сэтгэл зүйч",
+            cls.CLINICAL_RESEARCH_ASSOCIATE: "Клиникийн судалгааны нэгдэл",
+            cls.CLOTHING_TEXTILE_TECHNOLOGIST: "Хувцас/нэхмэлийн технологич",
+            cls.COACH: "Дасгалжуулагч",
+            cls.CO_ORDINATOR: "Зохицуулагч",
+            cls.COBBLER: "Гуталчин",
+            cls.COLLEGE_LECTOR: "Коллежийн лектор",
+            cls.COMPLAINTS_DEPARTMENT_CLERK: "Гомдлын хэлтсийн ажилтан",
+            cls.COMPLIANCE_SPECIALIST: "Дагаж мөрдөх мэргэжилтэн",
+            cls.COMPENSATION_BENEFIT_SPECIALIST: "Нөхөн олговор ба тэтгэмжийн мэргэжилтэн",
+            cls.CONCIERGE: "Консьерж",
+            cls.CONSTRUCTION_MANAGER: "Барилгын менежер",
+            cls.CONSTRUCTION_PLANT_OPERATOR: "Барилгын тоног төхөөрөмжийн оператор",
+            cls.CONSTRUCTION_WORKER: "Барилгын ажилтан",
+            cls.CONSULTANT: "Зөвлөх",
+            cls.CONTENT_PROVIDER: "Контент нийлүүлэгч",
+            cls.CONTRACT_ADMINISTRATOR: "Гэрээний администратор",
+            cls.CONTROLLER: "Хянагч",
+            cls.COOK: "Тогооч",
+            cls.COPYWRITER: "Копирайтер",
+            cls.COST_ACCOUNTANT: "Зардлын нягтлан бодогч",
+            cls.COUNTER_CLERK: "Лавлагааны ажилтан",
+            cls.COUNTRY_MANAGER_DIRECTOR: "Улсын менежер/захирал",
+            cls.COURIER: "Курьер",
+            cls.CRANE_OPERATOR: "Кран оператор",
+            cls.CRISIS_WORKER: "Хямралын ажилтан",
+            cls.CROUPIER: "Крупье",
+            cls.CULTURAL_OFFICER: "Соёлын ажилтан",
+            cls.CURATOR: "Куратор",
+            cls.CUSTOMER_RELATIONSHIP_MANAGER: "Үйлчлүүлэгчтэй харилцах менежер",
+            cls.CUSTOMER_SUPPORT_SPECIALIST: "Үйлчлүүлэгчийн дэмжлэгийн мэргэжилтэн",
+            cls.CUSTOMER_SERVICE_ANALYST: "Үйлчлүүлэгчийн үйлчилгээний шинжээч",
+            cls.CUSTOMS_BROKER: "Гаалийн брокер",
+            cls.CUSTOMS_OFFICER: "Гаалийн ажилтан",
+            cls.CUTTER_GRINDER_POLISHER: "Огтолч/Зүлгүүрч/Гялалгаагч",
+            cls.DTP_OPERATOR: "DTP оператор",
+            cls.DAMAGE_APPRAISER: "Хохирол үнэлгээч",
+            cls.DANCER: "Бүжигчин",
+            cls.DATA_ENTRY_OPERATOR: "Өгөгдөл оруулагч оператор",
+            cls.DATA_PROTECTION_OFFICER: "Өгөгдөл хамгаалалтын ажилтан",
+            cls.DATA_STATION_TESTING_SPECIALIST: "Өгөгдлийн станцын туршилтын мэргэжилтэн",
+            cls.DATA_ANALYST: "Өгөгдлийн шинжээч",
+            cls.DATA_COMMUNICATION_TECHNICIAN: "Өгөгдлийн харилцааны техникч",
+            cls.DATA_SCIENTIST: "Өгөгдлийн эрдэмтэн",
+            cls.DATABASE_ADMINISTRATOR: "Мэдээллийн сангийн администратор",
+            cls.DATABASE_ANALYST: "Мэдээллийн сангийн шинжээч",
+            cls.DEALER_TRADER: "Дилер/Трейдер",
+            cls.DENTAL_ASSISTANT: "Шүдний эмчийн туслах",
+            cls.DENTAL_HYGIENIST: "Шүдний эрүүл ахуйн мэргэжилтэн",
+            cls.DENTAL_TECHNICIAN: "Шүдний техникч",
+            cls.DENTIST: "Шүдний эмч",
+            cls.DEPARTMENT_DIRECTOR: "Хэлтсийн захирал",
+            cls.DEPARTMENT_MANAGER: "Хэлтсийн менежер",
+            cls.DEPUTY_HEADMASTER: "Захирлын орлогч",
+            cls.DEPUTY_SHOP_MANAGER: "Дэлгүүрийн менежерийн орлогч",
+            cls.DESIGN_ENGINEER: "Зураг төслийн инженер",
+            cls.DESIGN_TECHNICIAN: "Зураг төслийн техникч",
+            cls.DESIGN_ASSOCIATE: "Зураг төслийн нэгдэл",
+            cls.DESIGN_MANAGER: "Зураг төслийн менежер",
+            cls.DESIGNER: "Дизайнер",
+            cls.DEVELOPMENT_DIRECTOR: "Хөгжлийн захирал",
+            cls.DEVOPS_ENGINEER: "DevOps инженер",
+            cls.DIAGNOSTIC_TECHNICIAN: "Оношлогооны техникч",
+            cls.DIGITAL_MARKETING_MANAGER: "Дижитал маркетингийн менежер",
+            cls.DIGITAL_MARKETING_SPECIALIST: "Дижитал маркетингийн мэргэжилтэн",
+            cls.DISPATCH_CLERK: "Диспетчерийн ажилтан",
+            cls.DISPENSING_OPTICIAN: "Нүдний шилний мэргэжилтэн",
+            cls.DISTRIBUTION_CLERK: "Түгээлтийн ажилтан",
+            cls.DISTRICT_FOREST_OFFICER: "Дүүргийн ойн ажилтан",
+            cls.DIVERSITY_EQUITY_AND_INCLUSION_MANAGER: "Олон талт байдал, Тэгш байдал ба Оролцооны менежер",
+            cls.DOCTOR: "Эмч",
+            cls.DOCTOR_APPRENTICE: "Эмчийн шавь",
+            cls.DRIVER: "Жолооч",
+            cls.DRIVING_INSTRUCTOR: "Жолооны сургалтын багш",
+            cls.DRUG_SAFETY_SPECIALIST: "Эмийн аюулгүй байдлын мэргэжилтэн",
+            cls.E_COMMERCE_MANAGER: "Цахим худалдааны менежер",
+            cls.E_COMMERCE_SPECIALIST: "Цахим худалдааны мэргэжилтэн",
+            cls.ERP_PROGRAMMER: "ERP программист",
+            cls.ESG_MANAGER: "ESG менежер",
+            cls.ECOLOGIST: "Экологич",
+            cls.ECONOMIC_FINANCIAL_MANAGER: "Эдийн засаг/санхүүгийн менежер",
+            cls.ECONOMIST: "Эдийн засагч",
+            cls.EDITOR: "Редактор",
+            cls.EDITOR_IN_CHIEF: "Ерөнхий редактор",
+            cls.EDUCATION_COORDINATOR: "Боловсролын зохицуулагч",
+            cls.EDUCATION_SPECIALIST: "Боловсролын мэргэжилтэн",
+            cls.EDUCATOR_INSTRUCTOR_CARER: "Боловсролч/Зааварлагч/Асрагч",
+            cls.ELECTRICAL_ENGINEER: "Цахилгааны инженер",
+            cls.ELECTRICAL_ENGINEERING_TECHNICIAN: "Цахилгааны инженерийн техникч",
+            cls.ELECTRICAL_FITTER: "Цахилгааны угсрагч",
+            cls.ELECTRICIAN: "Цахилгаанч",
+            cls.ELECTRICIAN_INDUSTRIAL: "Цахилгаанч (үйлдвэрийн)",
+            cls.ELECTRONICS_ELECTRICIAN: "Электроникийн цахилгаанч",
+            cls.ENGINE_DRIVER: "Хөдөлгүүрийн жолооч",
+            cls.ENVIRONMENTALIST: "Байгаль орчны мэргэжилтэн",
+            cls.ESTATE_AGENT: "Үл хөдлөх хөрөнгийн агент",
+            cls.EVENT_MANAGER: "Арга хэмжээний менежер",
+            cls.EXPERT_SHOP_ASSISTANT: "Мэргэжлийн дэлгүүрийн туслах",
+            cls.FABRIC_CUTTER: "Даавуу огтолч",
+            cls.FACILITY_MANAGER: "Байгууламжийн менежер",
+            cls.FASHION_DESIGNER_PATTERN_CUTTER: "Загварч, Загварын огтолч",
+            cls.FAST_FOOD_WORKER: "Хурдан хоолны ажилтан",
+            cls.FILM_EDITOR: "Киноны редактор",
+            cls.FINANCE_MANAGER: "Санхүүгийн менежер",
+            cls.FINANCIAL_ADVISOR: "Санхүүгийн зөвлөх",
+            cls.FINANCIAL_AGENT: "Санхүүгийн агент",
+            cls.FINANCIAL_ANALYST: "Санхүүгийн шинжээч",
+            cls.FINANCIAL_MARKETS_SPECIALIST: "Санхүүгийн зах зээлийн мэргэжилтэн",
+            cls.FINANCIAL_ADMINISTRATION_ASSISTANT: "Санхүүгийн захиргааны туслах",
+            cls.FINISHING_WORKS_IN_CONSTRUCTIONS: "Барилгын дуусгалтын ажил",
+            cls.FIRE_OFFICER: "Гал түймэрийн ажилтан",
+            cls.FIREFIGHTER_RESCUER: "Гал унтраагч, Аврагч",
+            cls.FITNESS_INSTRUCTOR: "Фитнессийн зааварлагч",
+            cls.FITTER_ASSEMBLER: "Угсрагч",
+            cls.FLIGHT_ATTENDANT: "Нислэгийн бүртгэгч",
+            cls.FLOOR_LAYER_PAVER: "Шалны тавигч",
+            cls.FLORIST: "Цэцгийн дэлгүүрийн ажилтан",
+            cls.FOOD_ENGINEER: "Хүнсний инженер",
+            cls.FOOD_TECHNICIAN: "Хүнсний техникч",
+            cls.FOOD_TECHNOLOGIST: "Хүнсний технологич",
+            cls.FOREST_ENGINEER: "Ойн инженер",
+            cls.FOREST_TECHNICIAN: "Ойн техникч",
+            cls.FORESTER: "Ойч",
+            cls.FORESTRY_MANAGER: "Ойн аж ахуйн менежер",
+            cls.FOREMAN: "Ахлах ажилтан",
+            cls.FORKLIFT_TRUCK_OPERATOR: "Форклифтийн оператор",
+            cls.FORWARDER: "Экспедитор",
+            cls.FOUNDRY_WORKER: "Цутгалтын ажилтан",
+            cls.FRONTEND_DEVELOPER: "Фронтэнд хөгжүүлэгч",
+            cls.FUNERAL_SERVICE_WORKER: "Оршуулгын үйлчилгээний ажилтан",
+            cls.GAME_DESIGNER: "Тоглоомын дизайнер",
+            cls.GAME_DEVELOPER: "Тоглоомын хөгжүүлэгч",
+            cls.GARDENER: "Цэцэрлэгч",
+            cls.GENERAL_LABOURER: "Ерөнхий хөдөлмөрчин",
+            cls.GENERAL_STATE_ADVISOR: "Улсын ерөнхий зөвлөх",
+            cls.GEOGRAPHIC_INFORMATION_SYSTEMS_ENGINEER: "Газарзүйн мэдээллийн системийн инженер",
+            cls.GEOLOGIST: "Геологич",
+            cls.GEOTECHNICAL_INVESTIGATOR: "Геотехникийн судлаач",
+            cls.GLASSMAKER: "Шилчин",
+            cls.GO_DEVELOPER: "Go хөгжүүлэгч",
+            cls.GOLDSMITH_JEWELLER: "Алтны дархан, Үнэт эдлэлч",
+            cls.GRAIN_RECEIVER: "Үр тарианы хүлээн авагч",
+            cls.GRAPHIC: "График",
+            cls.GRAPHIC_DESIGNER: "График дизайнер",
+            cls.GUIDE_IN_THE_MUSEUM_GALLERY_CASTLE: "Музей, галерей, цайзны хөтөч",
+            cls.HR_ASSISTANT: "Хүний нөөцийн туслах",
+            cls.HR_BUSINESS_PARTNER: "Хүний нөөцийн бизнес түнш",
+            cls.HR_CONSULTANT: "Хүний нөөцийн зөвлөх",
+            cls.HR_COORDINATOR: "Хүний нөөцийн зохицуулагч",
+            cls.HR_GENERALIST: "Хүний нөөцийн ерөнхий мэргэжилтэн",
+            cls.HR_MANAGER: "Хүний нөөцийн менежер",
+            cls.HR_OFFICER: "Хүний нөөцийн ажилтан",
+            cls.HAIRDRESSER: "Үсчин",
+            cls.HEAD_NURSE: "Ахлах сувилагч",
+            cls.HEAD_PHARMACIST: "Ахлах эм зүйч",
+            cls.HEAD_OF_CUSTOMER_SUPPORT: "Үйлчлүүлэгчийн дэмжлэгийн дарга",
+            cls.HEAD_OF_TECHNICAL_DEPARTMENT: "Техникийн хэлтсийн дарга",
+            cls.HEAD_OF_VEHICLE_TECHNICAL_INSPECTION: "Тээврийн хэрэгслийн техникийн үзлэгийн дарга",
+            cls.HEAD_OF_CONTROLLING: "Хяналтын хэлтсийн дарга",
+            cls.HEAD_OF_PRODUCT_DEVELOPMENT: "Бүтээгдэхүүн хөгжүүлэлтийн дарга",
+            cls.HEAD_OF_THE_LEGAL_DEPARTMENT: "Хуулийн хэлтсийн дарга",
+            cls.HEALTH_CARE_ASSISTANT: "Эрүүл мэндийн тусламжийн ажилтан",
+            cls.HEALTH_CARE_PURCHASING_SPECIALIST: "Эрүүл мэндийн худалдан авалтын мэргэжилтэн",
+            cls.HEALTH_PROGRAM_DEVELOPMENT_SPECIALIST: "Эрүүл мэндийн хөтөлбөр хөгжүүлэлтийн мэргэжилтэн",
+            cls.HEALTH_AND_SAFETY_OFFICER: "Эрүүл мэнд, Аюулгүй байдлын ажилтан",
+            cls.HELPDESK_OPERATOR: "Тусламжийн ширээний оператор",
+            cls.HOSTESS: "Хостесс",
+            cls.HOTEL_PORTER: "Зочид буудлын портье",
+            cls.HOTEL_MANAGER: "Зочид буудлын менежер",
+            cls.HOUSEKEEPER: "Гэрийн үйлчлэгч",
+            cls.HOUSEKEEPING_SUPERVISOR: "Гэр ахуйн ажлын ахлагч",
+            cls.HOUSEMAN: "Гэрийн ажилтан",
+            cls.IC_DESIGN_ENGINEER: "IC зураг төслийн инженер",
+            cls.ICT_SPECIALIST: "МХТ-ийн мэргэжилтэн",
+            cls.IFRS_SPECIALIST: "НББОУС-ийн мэргэжилтэн",
+            cls.ISO_SPECIALIST: "ISO мэргэжилтэн",
+            cls.IT_ANALYST: "МТ-ийн шинжээч",
+            cls.IT_ARCHITECT: "МТ-ийн архитектор",
+            cls.IT_BUSINESS_ANALYST: "МТ-ийн бизнес шинжээч",
+            cls.IT_CONSULTANT: "МТ-ийн зөвлөх",
+            cls.IT_DIRECTOR: "МТ-ийн захирал",
+            cls.IT_MANAGER: "МТ-ийн менежер",
+            cls.IT_NETWORK_ADMINISTRATOR: "МТ-ийн сүлжээний администратор",
+            cls.IT_PRODUCT_MANAGER: "МТ-ийн бүтээгдэхүүний менежер",
+            cls.IT_PROJECT_MANAGER: "МТ-ийн төслийн менежер",
+            cls.IT_SECURITY_SPECIALIST: "МТ-ийн аюулгүй байдлын мэргэжилтэн",
+            cls.IT_SYSTEM_ADMINISTRATOR: "МТ-ийн системийн администратор",
+            cls.IT_TESTER: "МТ-ийн тестер",
+            cls.IT_AUDITOR: "МТ-ийн аудитор",
+            cls.IT_TESTER_AUTOMATED_TESTS: "МТ-ийн тестер - автомат тест",
+            cls.IT_TECHNICAL_SUPPORT_SPECIALIST: "МТ/Техникийн дэмжлэгийн мэргэжилтэн",
+            cls.IMAGE_STYLIST_BEAUTY_STYLIST: "Дүр төрхийн стилист, Гоо сайханы стилист",
+            cls.IMPORT_EXPORT_OFFICER: "Импорт/экспортын ажилтан",
+            cls.INCIDENT_MANAGER: "Аваарын менежер",
+            cls.INDEPENDENT_ADVISOR: "Бие даасан зөвлөх",
+            cls.INDEPENDENT_EXPERT_ASSOCIATE: "Бие даасан мэргэжилтэн",
+            cls.INDEPENDENT_OFFICIAL: "Бие даасан албан тушаалтан",
+            cls.INDUSTRIAL_CLIMBER: "Үйлдвэрийн альпинист",
+            cls.INDUSTRIAL_PAINTER: "Үйлдвэрийн будагч",
+            cls.INSPECTOR: "Байцаагч",
+            cls.INSURANCE_BROKER: "Даатгалын брокер",
+            cls.INSURANCE_PAYMENT_CONTROL_SPECIALIST: "Даатгалын төлбөрийн хяналтын мэргэжилтэн",
+            cls.INSURANCE_TECHNICIAN: "Даатгалын техникч",
+            cls.INSURANCE_UNDERWRITER: "Даатгалын андеррайтер",
+            cls.INSURANCE_ADMINISTRATOR: "Даатгалын администратор",
+            cls.INTERIOR_DESIGNER: "Интерьер дизайнер",
+            cls.INTERNAL_AUDITOR: "Дотоод аудитор",
+            cls.INTERNAL_COMMUNICATION_SPECIALIST: "Дотоод харилцааны мэргэжилтэн",
+            cls.INTERPRETER: "Орчуулагч",
+            cls.INVOICING_AND_PAYMENT_SPECIALIST: "Нэхэмжлэх, Төлбөрийн мэргэжилтэн",
+            cls.IRON_FOUNDER: "Төмрийн цутгагч",
+            cls.IRONWORKER: "Төмөрчин",
+            cls.JAVA_PROGRAMMER: "Java программист",
+            cls.JAVASCRIPT_PROGRAMMER: "Javascript программист",
+            cls.JOINER: "Модон эдлэлчин",
+            cls.JUDGE: "Шүүгч",
+            cls.JUDICIAL_ASSISTANT: "Шүүхийн туслах",
+            cls.JUNIOR_ACCOUNTANT: "Дэд нягтлан бодогч",
+            cls.JUNIOR_ARCHITECT: "Дэд архитектор",
+            cls.JUNIOR_GRAPHIC_DESIGNER: "Дэд график дизайнер",
+            cls.JUNIOR_PROJECT_MANAGER: "Дэд төслийн менежер",
+            cls.JUNIOR_SALES_REPRESENTATIVE: "Дэд борлуулалтын төлөөлөгч",
+            cls.JUNIOR_STATISTICIAN: "Дэд статистикч",
+            cls.KEY_ACCOUNT_MANAGER: "Гол дансны менежер",
+            cls.KINETOTHERAPIST: "Кинетотерапевт",
+            cls.KITCHEN_DESIGNER: "Гал тогооны дизайнер",
+            cls.KITCHEN_HELPER: "Гал тогооны туслах",
+            cls.LABORATORY_DIRECTOR: "Лабораторийн захирал",
+            cls.LABORATORY_TECHNICIAN: "Лабораторийн техникч",
+            cls.LAND_SURVEYOR_GEODESIST: "Газрын хэмжигч/Геодезист",
+            cls.LANDSCAPE_ARCHITECT: "Ландшафтын архитектор",
+            cls.LATHE_OPERATOR: "Токарь оператор",
+            cls.LABOURER: "Хөдөлмөрчин",
+            cls.LAWYER: "Хуульч",
+            cls.LEAD_DEVELOPER: "Ахлах хөгжүүлэгч",
+            cls.LEASING_CONSULTANT: "Лизингийн зөвлөх",
+            cls.LEASING_DIRECTOR: "Лизингийн захирал",
+            cls.LECTOR: "Лектор",
+            cls.LECTURER_TRAINER: "Лектор, Сургагч",
+            cls.LEGAL_ADVISOR: "Хуулийн зөвлөх",
+            cls.LIBRARIAN: "Номын сангийн ажилтан",
+            cls.LIFEGUARD_SWIMMING_INSTRUCTOR: "Аврагч, Усны спортын зааварлагч",
+            cls.LIGHTING_TECHNICIAN: "Гэрлийн техникч",
+            cls.LIVESTOCK_SPECIALIST: "Мал аж ахуйн мэргэжилтэн",
+            cls.LOAN_SPECIALIST: "Зээлийн мэргэжилтэн",
+            cls.LOGISTICS_CLERK: "Логистикийн ажилтан",
+            cls.LOGISTICS_CONTROLLER: "Логистикийн хянагч",
+            cls.LOGISTICS_DIRECTOR: "Логистикийн захирал",
+            cls.LOGISTICS_MANAGER: "Логистикийн менежер",
+            cls.LORRY_DRIVER: "Ачааны машины жолооч",
+            cls.LOSS_ADJUSTER: "Алдагдлын үнэлгээч",
+            cls.LUMBERJACK: "Модчин",
+            cls.MACHINE_FITTER: "Машины угсрагч",
+            cls.MACHINE_OPERATOR: "Машины оператор",
+            cls.MACHINE_OPERATOR_MACHINIST: "Машины оператор, Машинист",
+            cls.MACHINE_SETTER: "Машины тохируулагч",
+            cls.MAINENTENANCE_WORKER: "Засвар үйлчилгээний ажилтан",
+            cls.MAINTENANCE_ENGINEER: "Засвар үйлчилгээний инженер",
+            cls.MAINTENANCE_SUPERVISOR: "Засвар үйлчилгээний ахлагч",
+            cls.MAINTENANCE_WORKER: "Засвар үйлчилгээний ажилтан",
+            cls.MAKE_UP_ARTIST_WIGMAKER: "Гримчин, Үсний дизайнер",
+            cls.MANAGING_DIRECTOR: "Гүйцэтгэх захирал",
+            cls.MANAGING_EDITOR: "Менежер редактор",
+            cls.MARITIME_TRANSPORT_ORGANISER: "Далайн тээврийн зохион байгуулагч",
+            cls.MARKETING_ANALYST: "Маркетингийн шинжээч",
+            cls.MARKETING_DIRECTOR: "Маркетингийн захирал",
+            cls.MARKETING_MANAGER: "Маркетингийн менежер",
+            cls.MARKETING_OFFICER: "Маркетингийн ажилтан",
+            cls.MARKETING_SPECIALIST: "Маркетингийн мэргэжилтэн",
+            cls.MARKETING_ASSISTANT: "Маркетингийн туслах",
+            cls.MASTER_IN_VOCATIONAL_EDUCATION: "Мэргэжлийн боловсролын мастер",
+            cls.MASSEUR: "Массажист",
+            cls.MECHANICAL_DESIGN_ENGINEER_AUTOMATION: "Механик зураг төслийн инженер - Автоматжуулалт",
+            cls.MECHANICAL_ENGINEER: "Механик инженер",
+            cls.MECHANIZATION_MANAGER: "Механикжуулалтын менежер",
+            cls.MEDIA_BUYER: "Медиа худалдан авагч",
+            cls.MEDIA_PLANNER: "Медиа төлөвлөгч",
+            cls.MEDICAL_ADVISOR: "Анагаах ухааны зөвлөх",
+            cls.MEDICAL_INSTITUTION_MANAGER: "Эмнэлгийн байгууллагын менежер",
+            cls.MEDICAL_LABORATORY_TECHNICIAN: "Анагаах ухааны лабораторийн техникч",
+            cls.MEDICAL_ORDERLY: "Эмнэлгийн санитар",
+            cls.MEDICAL_RECORDS_CLERK: "Эмнэлгийн бүртгэлийн ажилтан",
+            cls.MEDICAL_ASSISTANT: "Эмнэлгийн туслах",
+            cls.MEDICAL_GRADUATE: "Анагаахын төгсөгч",
+            cls.MEDICAL_PHARMACEUTICAL_SALES_REPRESENTATIVE: "Анагаах/Эмийн борлуулалтын төлөөлөгч",
+            cls.MECHATRONICS_TECHNICIAN: "Мехатроникийн техникч",
+            cls.METALLURGIST: "Металлургич",
+            cls.METALLURGY_ENGINEER: "Металлургийн инженер",
+            cls.METALWORKER: "Металлчин",
+            cls.METEOROLOGIST: "Цаг уурч",
+            cls.METROLOGIST: "Метрологич",
+            cls.MICROBIOLOGIST: "Микробиологич",
+            cls.MICROCONTROLLER_PROGRAMMER: "Микроконтроллерийн программист",
+            cls.MIDWIFE: "Акушер",
+            cls.MILKER: "Сааль саагч",
+            cls.MILLING_MACHINE_OPERATOR: "Фрезийн машины оператор",
+            cls.MINER: "Уурхайч",
+            cls.MINING_ENGINEER: "Уул уурхайн инженер",
+            cls.MINING_MANAGER: "Уул уурхайн менежер",
+            cls.MINING_TECHNICIAN: "Уул уурхайн техникч",
+            cls.MOBILE_NETWORK_DEVELOPMENT_SPECIALIST: "Гар утасны сүлжээ хөгжүүлэлтийн мэргэжилтэн",
+            cls.MODEL: "Загварчин",
+            cls.MORTGAGE_SPECIALIST: "Ипотекийн мэргэжилтэн",
+            cls.MUSIC_AND_ART_SCHOOL_TEACHER: "Хөгжим, Урлагийн сургуулийн багш",
+            cls.NANNY: "Хүүхэд харагч",
+            cls.NAVAL_OFFICER: "Тэнгисийн офицер",
+            cls.NETWORK_MODELLING_SPECIALIST: "Сүлжээний загварчлалын мэргэжилтэн",
+            cls.NETWORK_STRATEGY_SPECIALIST: "Сүлжээний стратегийн мэргэжилтэн",
+            cls.NETWORK_AND_SERVICE_OPERATION_SPECIALIST: "Сүлжээ ба үйлчилгээний үйл ажиллагааны мэргэжилтэн",
+            cls.NOTARY: "Нотариат",
+            cls.NOTARY_ASSOCIATE: "Нотариатын туслах",
+            cls.NURSE: "Сувилагч",
+            cls.NURSERY_SCHOOL_TEACHER_ASSISTANT: "Цэцэрлэгийн багшийн туслах",
+            cls.NUTRITION_ASSISTANT: "Хоол тэжээлийн туслах",
+            cls.OSS_BSS_SPECIALIST: "OSS/BSS мэргэжилтэн",
+            cls.OBJECTIVE_C_PROGRAMMER: "Objective-C программист",
+            cls.OCCUPATIONAL_PSYCHOLOGIST: "Хөдөлмөрийн сэтгэл зүйч",
+            cls.OCCUPATIONAL_HEALTH_NURSE: "Хөдөлмөрийн эрүүл мэндийн сувилагч",
+            cls.OFFICE_MANAGER: "Оффисын менежер",
+            cls.OFFICIAL: "Албан тушаалтан",
+            cls.ONLINE_SHOP_ADMINISTRATOR: "Онлайн дэлгүүрийн администратор",
+            cls.OPERATIONS_MANAGER: "Үйл ажиллагааны менежер",
+            cls.OPERATIONS_SUPERVISOR: "Үйл ажиллагааны ахлагч",
+            cls.OPTOMETRIST: "Оптометрист",
+            cls.ORACLE_PROGRAMMER: "Oracle программист",
+            cls.ORGANIZER: "Зохион байгуулагч",
+            cls.ORTHOPEDIC_TECHNICIAN: "Ортопедийн техникч",
+            cls.PHP_PROGRAMMER: "PHP программист",
+            cls.PLC_PROGRAMMER: "PLC программист",
+            cls.PPC_SPECIALIST: "PPC мэргэжилтэн",
+            cls.PR_MANAGER: "PR менежер",
+            cls.PC_TECHNICIAN: "Компьютерийн техникч",
+            cls.PACKER: "Савлагч",
+            cls.PAINTER: "Будагч",
+            cls.PARALEGAL_LAW_STUDENT: "Хуулийн туслах - хуулийн оюутан",
+            cls.PASTRY_CHEF_CONFECTIONER: "Бялуучин, Чихэрлэг хоолны тогооч",
+            cls.PAYROLL_CLERK: "Цалингийн ажилтан",
+            cls.PEDAGOGUE: "Багш, Сурган хүмүүжүүлэгч",
+            cls.PEDICURIST_MANICURIST_NAIL_TECHNICIAN: "Педикюрист, Маникюрист, Хумсны техникч",
+            cls.PERL_PROGRAMMER: "Perl программист",
+            cls.PERSONAL_BANKER: "Хувийн банкир",
+            cls.PERSONNEL_MANAGER: "Персоналийн менежер",
+            cls.PETROL_STATION_ATTENDANT: "Шатахуун түгээгч",
+            cls.PETROLEUM_ENGINEER: "Газрын тосны инженер",
+            cls.PHARMACEUTICAL_LABORATORY_TECHNICIAN: "Эмийн лабораторийн техникч",
+            cls.PHARMACEUTICAL_PRODUCTS_MANAGER: "Эмийн бүтээгдэхүүний менежер",
+            cls.PHARMACIST: "Эм зүйч",
+            cls.PHARMACIST_ASSISTANT: "Эм зүйчийн туслах",
+            cls.PHOTO_EDITOR: "Фото редактор",
+            cls.PHOTOGRAPHER: "Гэрэл зурагчин",
+            cls.PHYSIOTHERAPIST: "Физик эмчилгээч",
+            cls.PICKER: "Сонгогч",
+            cls.PILOT: "Нисгэгч",
+            cls.PIPE_FITTER: "Хоолойчин",
+            cls.PIZZA_COOK: "Пицца тогооч",
+            cls.PLANNING_ASSISTANT: "Төлөвлөлтийн туслах",
+            cls.PLANT_MANAGER: "Үйлдвэрийн менежер",
+            cls.PLUMBER: "Сантехникч",
+            cls.POLICE_INSPECTOR: "Цагдаагийн байцаагч",
+            cls.POLICE_OFFICER: "Цагдаа",
+            cls.POSTAL_DELIVERY_WORKER: "Шуудангийн хүргэлтийн ажилтан",
+            cls.POSTAL_WORKER: "Шуудангийн ажилтан",
+            cls.POSTMASTER: "Шуудангийн дарга",
+            cls.POWER_ENGINEER: "Эрчим хүчний инженер",
+            cls.POWER_GENERATING_MACHINERY_OPERATOR: "Эрчим хүч үйлдвэрлэх машины оператор",
+            cls.PRE_SCHOOL_SCHOOL_KINDERGARDER_NURSE: "Сургуулийн өмнөх боловсролын/Цэцэрлэгийн сувилагч",
+            cls.PRESCHOOL_TEACHER: "Цэцэрлэгийн багш",
+            cls.PRIMARY_SCHOOL_TEACHER: "Бага сургуулийн багш",
+            cls.PRIEST: "Лам, Санваартан",
+            cls.PRINTER: "Хэвлэгч",
+            cls.PRINTING_TECHNICIAN: "Хэвлэлийн техникч",
+            cls.PRISON_OFFICER: "Шорон хорих газрын ажилтан",
+            cls.PRIVATE_BANKER: "Хувийн банкир",
+            cls.PROBLEM_MANAGER: "Асуудлын менежер",
+            cls.PROCESS_ENGINEER: "Процессын инженер",
+            cls.PROCESS_MANAGER: "Процессын менежер",
+            cls.PROCUREMENT_SPECIALIST: "Худалдан авалтын мэргэжилтэн",
+            cls.PRODUCER: "Продюсер",
+            cls.PRODUCT_DEVELOPMENT_SPECIALIST: "Бүтээгдэхүүн хөгжүүлэлтийн мэргэжилтэн",
+            cls.PRODUCT_MANAGER_SPECIALIST: "Бүтээгдэхүүний менежер - Мэргэжилтэн",
+            cls.PRODUCT_MARKETING_MANAGER: "Бүтээгдэхүүний маркетингийн менежер",
+            cls.PRODUCT_OWNER: "Бүтээгдэхүүний эзэн",
+            cls.PRODUCTION_DIRECTOR: "Үйлдвэрлэлийн захирал",
+            cls.PRODUCTION_MANAGER: "Үйлдвэрлэлийн менежер",
+            cls.PRODUCTION_PLANNER: "Үйлдвэрлэлийн төлөвлөгч",
+            cls.PRODUCTION_STANDARD_SETTER: "Үйлдвэрлэлийн стандарт тогтоогч",
+            cls.PRODUCTION_SUPERVISOR: "Үйлдвэрлэлийн ахлагч",
+            cls.PROFESSOR: "Профессор",
+            cls.PROGRAMMER: "Программист",
+            cls.PROJECT_ASSISTANT: "Төслийн туслах",
+            cls.PROJECT_COORDINATOR: "Төслийн зохицуулагч",
+            cls.PROJECT_MANAGER: "Төслийн менежер",
+            cls.PROJECT_PLANNER: "Төслийн төлөвлөгч",
+            cls.PROMOTIONAL_ASSISTANT: "Сурталчилгааны туслах",
+            cls.PROOFREADER: "Эх засагч",
+            cls.PROPERTY_MANAGER: "Өмчийн менежер",
+            cls.PROSECUTOR: "Прокурор",
+            cls.PSYCHOLOGIST: "Сэтгэл зүйч",
+            cls.PUBLIC_HEALTH_ADMINISTRATOR: "Нийгмийн эрүүл мэндийн администратор",
+            cls.PUBLISHING_HOUSE_DIRECTOR: "Хэвлэлийн газрын захирал",
+            cls.PURCHASING_MANAGER: "Худалдан авалтын менежер",
+            cls.PYTHON_PROGRAMMER: "Python программист",
+            cls.QUALITY_CONTROL_ISO_MANAGER: "Чанарын хяналт/ISO менежер",
+            cls.QUALITY_ENGINEER: "Чанарын инженер",
+            cls.QUALITY_INSPECTOR: "Чанарын байцаагч",
+            cls.QUALITY_MANAGER: "Чанарын менежер",
+            cls.QUALITY_PLANNER: "Чанарын төлөвлөгч",
+            cls.QUALIFIED_MECHANICAL_ENGINEER: "Мэргэшсэн механик инженер",
+            cls.QUANTITY_SURVEYOR: "Тооцооны инженер",
+            cls.R_PROGRAMMER: "R программист",
+            cls.RADIO_NETWORK_OPTIMIZATION_SPECIALIST: "Радио сүлжээний оновчлолын мэргэжилтэн",
+            cls.RADIO_NETWORK_PLANNING_SPECIALIST: "Радио сүлжээний төлөвлөлтийн мэргэжилтэн",
+            cls.RADIO_PRESENTER_AND_ANNOUNCER: "Радиогийн нэвтрүүлэгч",
+            cls.RADIOGRAPHER: "Рентген зурагч",
+            cls.RADIOLOGY_ASSISTANT: "Радиологийн туслах",
+            cls.RAIL_TRANSPORT_CONTROLLER_SHUNTER_SIGNALIST: "Төмөр замын хяналтын ажилтан (шунтер, сигналист)",
+            cls.REAL_ESTATE_APPRAISER: "Үл хөдлөх хөрөнгийн үнэлгээч",
+            cls.REAL_ESTATE_MAINTENANCE: "Үл хөдлөх хөрөнгийн засвар үйлчилгээ",
+            cls.RECEPTIONIST: "Хүлээн авалтын ажилтан",
+            cls.RECEPTIONIST_I: "Хүлээн авалтын ажилтан I",
+            cls.RECRUITER: "Элсэлтийн ажилтан",
+            cls.REFRIGERATION_MECHANIC: "Хөргөлтийн механик",
+            cls.REGIONAL_AREA_MANAGER: "Бүсийн менежер",
+            cls.REGIONAL_MANAGER: "Бүсийн менежер",
+            cls.REGISTRY_ADMINISTRATION_OFFICER: "Бүртгэлийн захиргааны ажилтан",
+            cls.REGULATORY_AFFAIRS_MANAGER: "Зохицуулалтын асуудлын менежер",
+            cls.REGULATORY_AFFAIRS_SPECIALIST: "Зохицуулалтын асуудлын мэргэжилтэн",
+            cls.REINSURANCE_SPECIALIST: "Дахин даатгалын мэргэжилтэн",
+            cls.RELATIONSHIP_MANAGER: "Харилцааны менежер",
+            cls.REPORTER: "Сурвалжлагч",
+            cls.REPORTING_SPECIALIST: "Тайлангийн мэргэжилтэн",
+            cls.REPAIRER: "Засварч",
+            cls.RESEARCH_PHYSICIAN: "Судалгааны эмч",
+            cls.RESEARCH_WORKER_SCIENTIFIC_WORKER: "Судалгааны ажилтан, Шинжлэх ухааны ажилтан",
+            cls.RESTAURANT_MANAGER: "Ресторанны менежер",
+            cls.RESTAURANT_WORKER: "Ресторанны ажилтан",
+            cls.RESTORER_CONSERVATOR: "Сэргээн засварлагч",
+            cls.RETAIL_STORE_MANAGER: "Жижиглэн худалдааны дэлгүүрийн менежер",
+            cls.RETURNS_DEPARTMENT_MANAGER: "Буцаалтын хэлтсийн менежер",
+            cls.RISK_MANAGER: "Рискийн менежер",
+            cls.RISK_SPECIALIST: "Рискийн мэргэжилтэн",
+            cls.ROAMING_SPECIALIST: "Роамингийн мэргэжилтэн",
+            cls.ROOFER: "Дээврийн ажилчин",
+            cls.RUBY_DEVELOPER_PROGRAMMER: "Ruby хөгжүүлэгч/программист",
+            cls.SAP_SPECIALIST: "SAP мэргэжилтэн",
+            cls.SEO_ANALYST: "SEO шинжээч",
+            cls.SAFETY_SPECIALIST: "Аюулгүй байдлын мэргэжилтэн",
+            cls.SAILOR: "Далайч",
+            cls.SALES_CONSULTANT: "Борлуулалтын зөвлөх",
+            cls.SALES_DIRECTOR: "Борлуулалтын захирал",
+            cls.SALES_ENGINEER: "Борлуулалтын инженер",
+            cls.SALES_MANAGER: "Борлуулалтын менежер",
+            cls.SALES_OBJECT_MANAGER: "Борлуулалтын объектын менежер",
+            cls.SALES_OFFICE_MANAGER: "Борлуулалтын оффисын менежер",
+            cls.SALES_OFFICER: "Борлуулалтын ажилтан",
+            cls.SALES_REPRESENTATIVE: "Борлуулалтын төлөөлөгч",
+            cls.SALES_COORDINATOR: "Борлуулалтын зохицуулагч",
+            cls.SAW_FILER: "Хөрөө засагч",
+            cls.SCAFFOLDER: "Тулгуур барилгач",
+            cls.SCHOOL_CANTEEN_MANAGER: "Сургуулийн гуанзны менежер",
+            cls.SCHOOL_CARETAKER: "Сургуулийн харуул хамгаалагч",
+            cls.SCHOOL_PRINCIPAL: "Сургуулийн захирал",
+            cls.SCRUM_MASTER: "Scrum Мастер",
+            cls.SEAMSTRESS: "Оёдолчин",
+            cls.SECONDARY_SCHOOL_TEACHER: "Дунд сургуулийн багш",
+            cls.SECRETARY: "Нарийн бичгийн дарга",
+            cls.SECRETARY_OF_HEALTH_DEPARTMENT: "Эрүүл мэндийн хэлтсийн нарийн бичгийн дарга",
+            cls.SECURITY_GUARD: "Харуул хамгаалагч",
+            cls.SECURITY_SERVICE_DIRECTOR: "Хамгаалалтын үйлчилгээний захирал",
+            cls.SECURITY_SERVICE_MANAGER: "Хамгаалалтын үйлчилгээний менежер",
+            cls.SECURITY_SERVICE_TECHNICIAN: "Хамгаалалтын үйлчилгээний техникч",
+            cls.SELLER_CASHIER: "Худалдагч / Кассир",
+            cls.SELLER_OF_BANK_SERVICES_LOAN_OFFICER: "Банкны үйлчилгээний худалдагч, Зээлийн ажилтан",
+            cls.SENIOR_ACCOUNTANT: "Ахлах нягтлан бодогч",
+            cls.SENIOR_ASSOCIATE: "Ахлах нэгдэл",
+            cls.SENIOR_GRAPHIC_DESIGNER: "Ахлах график дизайнер",
+            cls.SENIOR_PROJECT_MANAGER: "Ахлах төслийн менежер",
+            cls.SENIOR_SALES_REPRESENTATIVE: "Ахлах борлуулалтын төлөөлөгч",
+            cls.SENIOR_STATISTICIAN: "Ахлах статистикч",
+            cls.SERVICE_ENGINEER: "Үйлчилгээний инженер",
+            cls.SERVICE_TECHNICIAN: "Үйлчилгээний техникч",
+            cls.SHELF_STACKER_MERCHANDISER: "Тавиур дүүргэгч/Мерчандайзер",
+            cls.SHIFT_MANAGER: "Ээлжийн менежер",
+            cls.SHOP_ASSISTANT: "Дэлгүүрийн туслах",
+            cls.SHOP_WINDOW_DECORATOR: "Дэлгүүрийн цонхны чимэглэгч",
+            cls.SMITH: "Дархан",
+            cls.SOCIAL_COUNSELOR: "Нийгмийн зөвлөгч",
+            cls.SOCIAL_MEDIA_SPECIALIST: "Нийгмийн сүлжээний мэргэжилтэн",
+            cls.SOCIAL_REHABILITATION_SPECIALIST: "Нийгмийн нөхөн сэргээлтийн мэргэжилтэн",
+            cls.SOFTWARE_ENGINEER: "Програм хангамжийн инженер",
+            cls.SOFTWARE_CONSULTANT: "Програм хангамжийн зөвлөх",
+            cls.SOLDIER: "Цэрэг",
+            cls.SOLICITOR_BARRISTER: "Өмгөөлөгч",
+            cls.SOMMELIER: "Сомелье",
+            cls.SOUND_ENGINEER: "Дуу авианы инженер",
+            cls.SPA_THERAPIST: "Спа эмчилгээч",
+            cls.SPATIAL_PLANNER: "Орон зайн төлөвлөгч",
+            cls.SPECIAL_NEEDS_TEACHER: "Тусгай хэрэгцээт боловсролын багш",
+            cls.SPECIALIST_ADVISOR: "Мэргэжлийн зөвлөх",
+            cls.SPECIALIST_OFFICIAL: "Мэргэжлийн албан тушаалтан",
+            cls.SPEECH_THERAPIST: "Логопед",
+            cls.SPORTS_COACH: "Спортын дасгалжуулагч",
+            cls.SPORTS_COORDINATOR: "Спортын зохицуулагч",
+            cls.STAGEHAND: "Тайзны ажилтан",
+            cls.STATE_ADVISOR: "Улсын зөвлөх",
+            cls.STOCK_BROKER: "Хөрөнгийн брокер",
+            cls.STOKER_BOILER_ATTENDANT: "Зуухч",
+            cls.STONEMASON: "Чулуучин",
+            cls.STORE_DEPARTMENT_MANAGER: "Агуулахын хэлтсийн менежер",
+            cls.STOREKEEPER: "Агуулахын ажилтан",
+            cls.STRUCTURAL_ENGINEER: "Байгууламжийн инженер",
+            cls.SUPERINTENDENT: "Ерөнхий хянагч",
+            cls.SUPPLY_CHAIN_SPECIALIST: "Нийлүүлэлтийн гинжийн мэргэжилтэн",
+            cls.SUPPLY_TECHNICIAN: "Нийлүүлэлтийн техникч",
+            cls.SURVEY_INTERVIEWER: "Судалгааны ярилцлагч",
+            cls.SWITCHING_NETWORK_DEVELOPMENT_SPECIALIST: "Шилжүүлэлтийн сүлжээ хөгжүүлэлтийн мэргэжилтэн",
+            cls.SYSTEMS_ADMINISTRATOR: "Системийн администратор",
+            cls.SYSTEMS_ENGINEER: "Системийн инженер",
+            cls.TV_PRESENTER: "ТВ нэвтрүүлэгч",
+            cls.TV_FILM_PRODUCTION_ASSISTANT: "ТВ/Киноны үйлдвэрлэлийн туслах",
+            cls.TAILOR: "Оёдолчин",
+            cls.TAX_ADVISOR: "Татварын зөвлөх",
+            cls.TAXI_DRIVER: "Таксины жолооч",
+            cls.TEACHER: "Багш",
+            cls.TEAM_LEADER: "Багийн ахлагч",
+            cls.TECHNICAL_DIRECTOR: "Техникийн захирал",
+            cls.TECHNICAL_MANAGER: "Техникийн менежер",
+            cls.TECHNICAL_STAFF: "Техникийн ажилтан",
+            cls.TECHNICAL_SUPPORT_SPECIALIST: "Техникийн дэмжлэгийн мэргэжилтэн",
+            cls.TECHNICAL_WRITER: "Техникийн бичгийн ажилтан",
+            cls.TECHNICAL_PRODUCT_ENGINEER: "Техникийн бүтээгдэхүүний инженер",
+            cls.TELECOMMUNICATION_SPECIALIST: "Харилцаа холбооны мэргэжилтэн",
+            cls.TELECOMMUNICATION_NETWORK_INSTALLER: "Харилцаа холбооны сүлжээ угсрагч",
+            cls.TELECOMMUNICATIONS_NETWORK_DESIGNER: "Харилцаа холбооны сүлжээний дизайнер",
+            cls.TELECOMMUNICATIONS_PRODUCT_DEVELOPMENT_SPECIALIST: "Харилцаа холбооны бүтээгдэхүүн хөгжүүлэлтийн мэргэжилтэн",
+            cls.TELECOMMUNICATIONS_SERVICE_DEVELOPMENT_SPECIALIST: "Харилцаа холбооны үйлчилгээ хөгжүүлэлтийн мэргэжилтэн",
+            cls.TELEMARKETER: "Утсаар маркетинг хийгч",
+            cls.TERMINAL_OPERATOR: "Терминалийн оператор",
+            cls.TESTING_MANAGER: "Туршилтын менежер",
+            cls.TECHNICIAN: "Техникч",
+            cls.TECHNOLOGIST: "Технологич",
+            cls.TILE_MAN: "Хавтанч",
+            cls.TIMBER_ENGINEER: "Модон материалын инженер",
+            cls.TOOLMAKER: "Хэрэгсэл үйлдвэрлэгч",
+            cls.TRAFFIC_CONTROLLER: "Замын хөдөлгөөний хяналтын ажилтан",
+            cls.TRAFFIC_ENGINEER: "Замын хөдөлгөөний инженер",
+            cls.TRAIN_CONDUCTOR: "Галт тэргний кондуктор",
+            cls.TRAIN_DISPATCHER: "Галт тэргний диспетчер",
+            cls.TRAINEE_BAILIFF: "Дадлагажигч биелэлтийн ажилтан",
+            cls.TRAM_DRIVER: "Трамвайн жолооч",
+            cls.TRANSMISSION_NETW_ANALYSIS_DEVELOPMENT_SPECIALIST: "Дамжуулалтын сүлжээний шинжилгээ ба хөгжүүлэлтийн мэргэжилтэн",
+            cls.TRANSPORT_MANAGER: "Тээврийн менежер",
+            cls.TRAVEL_GUIDE: "Аялалын хөтөч",
+            cls.TROLLEYBUS_DRIVER: "Троллейбусны жолооч",
+            cls.TUTOR: "Хувийн багш",
+            cls.TYRE_FITTER: "Дугуй угсрагч",
+            cls.UX_DESIGNER: "UX дизайнер",
+            cls.UNIVERSITY_TEACHER: "Их сургуулийн багш",
+            cls.UNIVERSITY_TEACHING_ASSISTANT: "Их сургуулийн багшийн туслах",
+            cls.UPHOLSTERER: "Эдлэлчин",
+            cls.USER_EXPERIENCE_EXPERT: "Хэрэглэгчийн туршлагын мэргэжилтэн",
+            cls.VAT_SPECIALIST: "НӨАТ-ийн мэргэжилтэн",
+            cls.VFX_ARTIST: "VFX уран бүтээлч",
+            cls.VARNISHER: "Лак түрхэгч",
+            cls.VEHICLE_BODY_REPAIRER: "Тээврийн хэрэгслийн бие засварч",
+            cls.VETERINARIAN: "Малын эмч",
+            cls.VETERINARY_TECHNICIAN: "Малын эмнэлгийн техникч",
+            cls.VISUAL_MERCHANDISER: "Визуал мерчандайзер",
+            cls.WAITER: "Зөөгч",
+            cls.WAITER_ROOM_SERVICE: "Зөөгч - Өрөөний үйлчилгээ",
+            cls.WARD_DOMESTIC: "Тасгийн гэрийн ажилтан",
+            cls.WARDROBE_ASSISTANT: "Хувцасны туслах",
+            cls.WAREHOUSE_MANAGER: "Агуулахын менежер",
+            cls.WAREHOUSEMAN: "Агуулахч",
+            cls.WATER_MANAGEMENT_ENGINEER: "Усны менежментийн инженер",
+            cls.WATER_MANAGEMENT_TECHNICIAN: "Усны менежментийн техникч",
+            cls.WEB_DESIGNER: "Веб дизайнер",
+            cls.WEBMASTER: "Вебмастер",
+            cls.WELDER: "Гагнуурч",
+            cls.WINDOW_DRESSER_DECORATOR: "Цонхны чимэглэгч",
+            cls.WOODWORKING_TECHNICIAN: "Модон эдлэлийн техникч",
+            cls.YOUTH_WORKER: "Залуучуудын ажилтан",
+            cls.IOS_DEVELOPER: "iOS хөгжүүлэгч",
+            cls.OTHER: "Бусад",
+        }
+
     @property
     def mongolian_name(self) -> str:
-        names = {
-            PositionalCategory.NET_PROGRAMMER: ".NET программист",
-            PositionalCategory.ABAP_PROGRAMMER: "ABAP программист",
-            PositionalCategory.AI_ENGINEER: "Хиймэл оюун ухааны инженер",
-            PositionalCategory.ASP_NET_PROGRAMMER: "ASP.NET программист",
-            PositionalCategory.ACCOUNT_DIRECTOR: "Дансны захирал",
-            PositionalCategory.ACCOUNT_EXECUTIVE: "Дансны гүйцэтгэх ажилтан",
-            PositionalCategory.ACCOUNT_MANAGER: "Дансны менежер",
-            PositionalCategory.ACCOUNTANT: "Нягтлан бодогч",
-            PositionalCategory.ACCOUNTING_CLERK: "Нягтлан бодох бүртгэлийн ажилтан",
-            PositionalCategory.ACCOUNTING_SERVICE_MANAGER: "Нягтлан бодох бүртгэлийн үйлчилгээний менежер",
-            PositionalCategory.ACCOMMODATION_MANAGER: "Байрны менежер",
-            PositionalCategory.ACTOR: "Жүжигчин",
-            PositionalCategory.ACTIVITY_INSTRUCTOR: "Үйл ажиллагааны зааварлагч",
-            PositionalCategory.ADMINISTRATIVE_WORKER: "Захиргааны ажилтан",
-            PositionalCategory.ADMINISTRATIVE_OFFICER: "Захиргааны офицер",
-            PositionalCategory.AGRICULTURAL_ENGINEER_AGRONOMIST: "Хөдөө аж ахуйн инженер, Агрономч",
-            PositionalCategory.AGRICULTURAL_EQUIPMENT_OPERATOR: "Хөдөө аж ахуйн тоног төхөөрөмжийн оператор",
-            PositionalCategory.AGRICULTURAL_SPECIALIST: "Хөдөө аж ахуйн мэргэжилтэн",
-            PositionalCategory.AGRICULTURAL_TECHNICIAN: "Хөдөө аж ахуйн техникч",
-            PositionalCategory.AGRICULTURAL_TECHNOLOGIST: "Хөдөө аж ахуйн технологич",
-            PositionalCategory.AIR_TRAFFIC_CONTROLLER: "Агаарын хөдөлгөөний хяналтын ажилтан",
-            PositionalCategory.AIRCRAFT_TECHNICIAN: "Нисэх онгоцны техникч",
-            PositionalCategory.AIRCRAFT_ENGINEER: "Нисэх онгоцны инженер",
-            PositionalCategory.AMBULANCE_DRIVER: "Түргэн тусламжийн жолооч",
-            PositionalCategory.AMBULANCE_PARAMEDIC: "Түргэн тусламжийн парамедик",
-            PositionalCategory.ANESTHETIST: "Мэдээ алдуулагч эмч",
-            PositionalCategory.ANIMAL_CARE_WORKER: "Амьтны асаргааны ажилтан",
-            PositionalCategory.ANTI_MONEY_LAUNDERING_SPECIALIST: "Мөнгө угаахтай тэмцэх мэргэжилтэн",
-            PositionalCategory.ARCHAEOLOGIST: "Археологич",
-            PositionalCategory.ARCHITECT: "Архитектор",
-            PositionalCategory.ART_DIRECTOR: "Урлагийн захирал",
-            PositionalCategory.ARCHIVIST_REGISTRY_ADMINISTRATOR: "Архивч, Бүртгэлийн администратор",
-            PositionalCategory.ASSISTANT: "Туслах",
-            PositionalCategory.ASSISTANT_COOK: "Тогооч туслах",
-            PositionalCategory.ASSISTANT_FINANCIAL_CONTROLLER: "Санхүүгийн хяналтын туслах",
-            PositionalCategory.ASSISTANT_TEACHER: "Багшийн туслах",
-            PositionalCategory.ASSISTANT_OF_AUDITOR: "Аудиторын туслах",
-            PositionalCategory.ASSISTANT_TO_A_TAX_ADVISOR: "Татварын зөвлөхийн туслах",
-            PositionalCategory.AU_PAIR: "Ау-пэйр",
-            PositionalCategory.AUDITOR: "Аудитор",
-            PositionalCategory.AUTO_ELECTRICIAN: "Автомашины цахилгаанч",
-            PositionalCategory.AUTO_REPAIR_SHOP_MANAGER: "Автомашины засварын газрын менежер",
-            PositionalCategory.AUTOMATION_ENGINEER: "Автоматжуулалтын инженер",
-            PositionalCategory.AUTOMATION_PLANNER: "Автоматжуулалтын төлөвлөгч",
-            PositionalCategory.AXEMAN: "Сүхчин",
-            PositionalCategory.BACK_OFFICE_SPECIALIST: "Арын оффисын мэргэжилтэн",
-            PositionalCategory.BAILIFF_ENFORCEMENT_OFFICER: "Шүүхийн биелэлтийн ажилтан",
-            PositionalCategory.BAKER: "Талхчин",
-            PositionalCategory.BARTENDER: "Бартендер",
-            PositionalCategory.BEAUTICIAN: "Гоо сайханч",
-            PositionalCategory.BETTING_CLERK: "Бооцооны ажилтан",
-            PositionalCategory.BICYCLE_MECHANIC: "Дугуйн механик",
-            PositionalCategory.BIDDING_ENGINEER: "Тендерийн инженер",
-            PositionalCategory.BILLING_CLERK: "Тооцооны ажилтан",
-            PositionalCategory.BIOLOGIST: "Биологич",
-            PositionalCategory.BOOKBINDER: "Номын хавтасч",
-            PositionalCategory.BOOKMAKER: "Бооцооны компанийн ажилтан",
-            PositionalCategory.BOOKING_AGENT: "Захиалгын агент",
-            PositionalCategory.BOSUN: "Хөлөг онгоцны ахлагч",
-            PositionalCategory.BRANCH_DIRECTOR: "Салбарын захирал",
-            PositionalCategory.BRAND_MANAGER: "Брэндийн менежер",
-            PositionalCategory.BRICKLAYER: "Тоосгочин",
-            PositionalCategory.BUILDING_CONTROL_SURVEYOR: "Барилгын хяналтын хэмжигч",
-            PositionalCategory.BUILDING_TECHNICIAN: "Барилгын техникч",
-            PositionalCategory.BUS_DRIVER: "Автобусны жолооч",
-            PositionalCategory.BUSINESS_ANALYST: "Бизнес шинжээч",
-            PositionalCategory.BUSINESS_DEVELOPMENT_MANAGER: "Бизнесийн хөгжлийн менежер",
-            PositionalCategory.BUSINESS_GROUP_MANAGER: "Бизнесийн бүлгийн менежер",
-            PositionalCategory.BUSINESS_INTELLIGENCE_SPECIALIST: "Бизнесийн тагнуулын мэргэжилтэн",
-            PositionalCategory.BUTCHER: "Махчин",
-            PositionalCategory.BUYING_AGENT: "Худалдан авалтын агент",
-            PositionalCategory.C_PROGRAMMER: "C программист",
-            PositionalCategory.CSHARP_PROGRAMMER: "C# программист",
-            PositionalCategory.CPP_PROGRAMMER: "C++ программист",
-            PositionalCategory.CAD_SPECIALIST: "CAD мэргэжилтэн",
-            PositionalCategory.CNC_MACHINE_SETTER: "CNC машины тохируулагч",
-            PositionalCategory.CNC_PROGRAMMER: "CNC программист",
-            PositionalCategory.CRM_SPECIALIST: "CRM мэргэжилтэн",
-            PositionalCategory.CSR_SPECIALIST: "CSR мэргэжилтэн",
-            PositionalCategory.CABINET_MAKER: "Тавилгачин",
-            PositionalCategory.CABLE_CAR_OPERATOR: "Кабины машины оператор",
-            PositionalCategory.CALL_CENTER_SUPERVISOR: "Дуудлагын төвийн ахлагч",
-            PositionalCategory.CALL_CENTRE_DIRECTOR: "Дуудлагын төвийн захирал",
-            PositionalCategory.CALL_CENTRE_MANAGER: "Дуудлагын төвийн менежер",
-            PositionalCategory.CALL_OPERATOR: "Дуудлагын оператор",
-            PositionalCategory.CAMERA_OPERATOR: "Камерын оператор",
-            PositionalCategory.CAR_DRIVER: "Автомашины жолооч",
-            PositionalCategory.CAR_FLEET_MANAGER: "Автопаркын менежер",
-            PositionalCategory.CAR_GLASS_FITTER: "Автомашины шилний угсрагч",
-            PositionalCategory.CAR_MECHANIC: "Автомашины механик",
-            PositionalCategory.CAR_UPHOLSTERER: "Автомашины эдлэлчин",
-            PositionalCategory.CAR_WASH_WORKER: "Автомашин угаагч",
-            PositionalCategory.CAR_SALESMAN: "Автомашины худалдагч",
-            PositionalCategory.CAREER_ADVISOR: "Карьерын зөвлөх",
-            PositionalCategory.CAREGIVER: "Асрагч",
-            PositionalCategory.CARER_PERSONAL_ASSISTANT: "Асрагч, Хувийн туслах",
-            PositionalCategory.CARPENTER: "Мужаан",
-            PositionalCategory.CASEWORKER: "Хэргийн ажилтан",
-            PositionalCategory.CASHIER: "Кассир",
-            PositionalCategory.CATERING_MANAGER: "Хоолны үйлчилгээний менежер",
-            PositionalCategory.CHAMBERMAID: "Өрөөний үйлчлэгч",
-            PositionalCategory.CHARGE_NURSE: "Ахлах сувилагч",
-            PositionalCategory.CHEMICAL_ENGINEER: "Химийн инженер",
-            PositionalCategory.CHEMICAL_LAB_TECHNICIAN: "Химийн лабораторийн техникч",
-            PositionalCategory.CHEMIST: "Химич",
-            PositionalCategory.CHEF: "Ерөнхий тогооч",
-            PositionalCategory.CHIEF_ACCOUNTANT: "Ерөнхий нягтлан бодогч",
-            PositionalCategory.CHIEF_ACCOUNTANT_DEPUTY: "Ерөнхий нягтлан бодогчийн орлогч",
-            PositionalCategory.CHIEF_ADVISOR: "Ерөнхий зөвлөх",
-            PositionalCategory.CHIEF_EXECUTIVE_OFFICER: "Гүйцэтгэх захирал",
-            PositionalCategory.CHIEF_OFFICIAL: "Ерөнхий албан тушаалтан",
-            PositionalCategory.CHIEF_RECEPTIONIST_OFFICER: "Ерөнхий хүлээн авалтын ажилтан",
-            PositionalCategory.CHIEF_STATE_ADVISOR: "Улсын ерөнхий зөвлөх",
-            PositionalCategory.CHIEF_BOROUGH_CONTROLLER: "Дүүргийн ерөнхий хяналтын ажилтан",
-            PositionalCategory.CHOREOGRAPHER: "Хореограф",
-            PositionalCategory.CIVIL_ENGINEER: "Иргэний инженер",
-            PositionalCategory.CLAIMS_ADMINISTRATOR: "Нэхэмжлэлийн администратор",
-            PositionalCategory.CLAIMS_SPECIALIST: "Нэхэмжлэлийн мэргэжилтэн",
-            PositionalCategory.CLEANER: "Цэвэрлэгч",
-            PositionalCategory.CLEANING_MANAGER: "Цэвэрлэгээний менежер",
-            PositionalCategory.CLIENT_OFFICER: "Үйлчлүүлэгчийн ажилтан",
-            PositionalCategory.CLINICAL_DATA_MANAGER: "Клиникийн өгөгдлийн менежер",
-            PositionalCategory.CLINICAL_PSYCHOLOGIST: "Клиникийн сэтгэл зүйч",
-            PositionalCategory.CLINICAL_RESEARCH_ASSOCIATE: "Клиникийн судалгааны нэгдэл",
-            PositionalCategory.CLOTHING_TEXTILE_TECHNOLOGIST: "Хувцас/нэхмэлийн технологич",
-            PositionalCategory.COACH: "Дасгалжуулагч",
-            PositionalCategory.CO_ORDINATOR: "Зохицуулагч",
-            PositionalCategory.COBBLER: "Гуталчин",
-            PositionalCategory.COLLEGE_LECTOR: "Коллежийн лектор",
-            PositionalCategory.COMPLAINTS_DEPARTMENT_CLERK: "Гомдлын хэлтсийн ажилтан",
-            PositionalCategory.COMPLIANCE_SPECIALIST: "Дагаж мөрдөх мэргэжилтэн",
-            PositionalCategory.COMPENSATION_BENEFIT_SPECIALIST: "Нөхөн олговор ба тэтгэмжийн мэргэжилтэн",
-            PositionalCategory.CONCIERGE: "Консьерж",
-            PositionalCategory.CONSTRUCTION_MANAGER: "Барилгын менежер",
-            PositionalCategory.CONSTRUCTION_PLANT_OPERATOR: "Барилгын тоног төхөөрөмжийн оператор",
-            PositionalCategory.CONSTRUCTION_WORKER: "Барилгын ажилтан",
-            PositionalCategory.CONSULTANT: "Зөвлөх",
-            PositionalCategory.CONTENT_PROVIDER: "Контент нийлүүлэгч",
-            PositionalCategory.CONTRACT_ADMINISTRATOR: "Гэрээний администратор",
-            PositionalCategory.CONTROLLER: "Хянагч",
-            PositionalCategory.COOK: "Тогооч",
-            PositionalCategory.COPYWRITER: "Копирайтер",
-            PositionalCategory.COST_ACCOUNTANT: "Зардлын нягтлан бодогч",
-            PositionalCategory.COUNTER_CLERK: "Лавлагааны ажилтан",
-            PositionalCategory.COUNTRY_MANAGER_DIRECTOR: "Улсын менежер/захирал",
-            PositionalCategory.COURIER: "Курьер",
-            PositionalCategory.CRANE_OPERATOR: "Кран оператор",
-            PositionalCategory.CRISIS_WORKER: "Хямралын ажилтан",
-            PositionalCategory.CROUPIER: "Крупье",
-            PositionalCategory.CULTURAL_OFFICER: "Соёлын ажилтан",
-            PositionalCategory.CURATOR: "Куратор",
-            PositionalCategory.CUSTOMER_RELATIONSHIP_MANAGER: "Үйлчлүүлэгчтэй харилцах менежер",
-            PositionalCategory.CUSTOMER_SUPPORT_SPECIALIST: "Үйлчлүүлэгчийн дэмжлэгийн мэргэжилтэн",
-            PositionalCategory.CUSTOMER_SERVICE_ANALYST: "Үйлчлүүлэгчийн үйлчилгээний шинжээч",
-            PositionalCategory.CUSTOMS_BROKER: "Гаалийн брокер",
-            PositionalCategory.CUSTOMS_OFFICER: "Гаалийн ажилтан",
-            PositionalCategory.CUTTER_GRINDER_POLISHER: "Огтолч/Зүлгүүрч/Гялалгаагч",
-            PositionalCategory.DTP_OPERATOR: "DTP оператор",
-            PositionalCategory.DAMAGE_APPRAISER: "Хохирол үнэлгээч",
-            PositionalCategory.DANCER: "Бүжигчин",
-            PositionalCategory.DATA_ENTRY_OPERATOR: "Өгөгдөл оруулагч оператор",
-            PositionalCategory.DATA_PROTECTION_OFFICER: "Өгөгдөл хамгаалалтын ажилтан",
-            PositionalCategory.DATA_STATION_TESTING_SPECIALIST: "Өгөгдлийн станцын туршилтын мэргэжилтэн",
-            PositionalCategory.DATA_ANALYST: "Өгөгдлийн шинжээч",
-            PositionalCategory.DATA_COMMUNICATION_TECHNICIAN: "Өгөгдлийн харилцааны техникч",
-            PositionalCategory.DATA_SCIENTIST: "Өгөгдлийн эрдэмтэн",
-            PositionalCategory.DATABASE_ADMINISTRATOR: "Мэдээллийн сангийн администратор",
-            PositionalCategory.DATABASE_ANALYST: "Мэдээллийн сангийн шинжээч",
-            PositionalCategory.DEALER_TRADER: "Дилер/Трейдер",
-            PositionalCategory.DENTAL_ASSISTANT: "Шүдний эмчийн туслах",
-            PositionalCategory.DENTAL_HYGIENIST: "Шүдний эрүүл ахуйн мэргэжилтэн",
-            PositionalCategory.DENTAL_TECHNICIAN: "Шүдний техникч",
-            PositionalCategory.DENTIST: "Шүдний эмч",
-            PositionalCategory.DEPARTMENT_DIRECTOR: "Хэлтсийн захирал",
-            PositionalCategory.DEPARTMENT_MANAGER: "Хэлтсийн менежер",
-            PositionalCategory.DEPUTY_HEADMASTER: "Захирлын орлогч",
-            PositionalCategory.DEPUTY_SHOP_MANAGER: "Дэлгүүрийн менежерийн орлогч",
-            PositionalCategory.DESIGN_ENGINEER: "Зураг төслийн инженер",
-            PositionalCategory.DESIGN_TECHNICIAN: "Зураг төслийн техникч",
-            PositionalCategory.DESIGN_ASSOCIATE: "Зураг төслийн нэгдэл",
-            PositionalCategory.DESIGN_MANAGER: "Зураг төслийн менежер",
-            PositionalCategory.DESIGNER: "Дизайнер",
-            PositionalCategory.DEVELOPMENT_DIRECTOR: "Хөгжлийн захирал",
-            PositionalCategory.DEVOPS_ENGINEER: "DevOps инженер",
-            PositionalCategory.DIAGNOSTIC_TECHNICIAN: "Оношлогооны техникч",
-            PositionalCategory.DIGITAL_MARKETING_MANAGER: "Дижитал маркетингийн менежер",
-            PositionalCategory.DIGITAL_MARKETING_SPECIALIST: "Дижитал маркетингийн мэргэжилтэн",
-            PositionalCategory.DISPATCH_CLERK: "Диспетчерийн ажилтан",
-            PositionalCategory.DISPENSING_OPTICIAN: "Нүдний шилний мэргэжилтэн",
-            PositionalCategory.DISTRIBUTION_CLERK: "Түгээлтийн ажилтан",
-            PositionalCategory.DISTRICT_FOREST_OFFICER: "Дүүргийн ойн ажилтан",
-            PositionalCategory.DIVERSITY_EQUITY_AND_INCLUSION_MANAGER: "Олон талт байдал, Тэгш байдал ба Оролцооны менежер",
-            PositionalCategory.DOCTOR: "Эмч",
-            PositionalCategory.DOCTOR_APPRENTICE: "Эмчийн шавь",
-            PositionalCategory.DRIVER: "Жолооч",
-            PositionalCategory.DRIVING_INSTRUCTOR: "Жолооны сургалтын багш",
-            PositionalCategory.DRUG_SAFETY_SPECIALIST: "Эмийн аюулгүй байдлын мэргэжилтэн",
-            PositionalCategory.E_COMMERCE_MANAGER: "Цахим худалдааны менежер",
-            PositionalCategory.E_COMMERCE_SPECIALIST: "Цахим худалдааны мэргэжилтэн",
-            PositionalCategory.ERP_PROGRAMMER: "ERP программист",
-            PositionalCategory.ESG_MANAGER: "ESG менежер",
-            PositionalCategory.ECOLOGIST: "Экологич",
-            PositionalCategory.ECONOMIC_FINANCIAL_MANAGER: "Эдийн засаг/санхүүгийн менежер",
-            PositionalCategory.ECONOMIST: "Эдийн засагч",
-            PositionalCategory.EDITOR: "Редактор",
-            PositionalCategory.EDITOR_IN_CHIEF: "Ерөнхий редактор",
-            PositionalCategory.EDUCATION_COORDINATOR: "Боловсролын зохицуулагч",
-            PositionalCategory.EDUCATION_SPECIALIST: "Боловсролын мэргэжилтэн",
-            PositionalCategory.EDUCATOR_INSTRUCTOR_CARER: "Боловсролч/Зааварлагч/Асрагч",
-            PositionalCategory.ELECTRICAL_ENGINEER: "Цахилгааны инженер",
-            PositionalCategory.ELECTRICAL_ENGINEERING_TECHNICIAN: "Цахилгааны инженерийн техникч",
-            PositionalCategory.ELECTRICAL_FITTER: "Цахилгааны угсрагч",
-            PositionalCategory.ELECTRICIAN: "Цахилгаанч",
-            PositionalCategory.ELECTRICIAN_INDUSTRIAL: "Цахилгаанч (үйлдвэрийн)",
-            PositionalCategory.ELECTRONICS_ELECTRICIAN: "Электроникийн цахилгаанч",
-            PositionalCategory.ENGINE_DRIVER: "Хөдөлгүүрийн жолооч",
-            PositionalCategory.ENVIRONMENTALIST: "Байгаль орчны мэргэжилтэн",
-            PositionalCategory.ESTATE_AGENT: "Үл хөдлөх хөрөнгийн агент",
-            PositionalCategory.EVENT_MANAGER: "Арга хэмжээний менежер",
-            PositionalCategory.EXPERT_SHOP_ASSISTANT: "Мэргэжлийн дэлгүүрийн туслах",
-            PositionalCategory.FABRIC_CUTTER: "Даавуу огтолч",
-            PositionalCategory.FACILITY_MANAGER: "Байгууламжийн менежер",
-            PositionalCategory.FASHION_DESIGNER_PATTERN_CUTTER: "Загварч, Загварын огтолч",
-            PositionalCategory.FAST_FOOD_WORKER: "Хурдан хоолны ажилтан",
-            PositionalCategory.FILM_EDITOR: "Киноны редактор",
-            PositionalCategory.FINANCE_MANAGER: "Санхүүгийн менежер",
-            PositionalCategory.FINANCIAL_ADVISOR: "Санхүүгийн зөвлөх",
-            PositionalCategory.FINANCIAL_AGENT: "Санхүүгийн агент",
-            PositionalCategory.FINANCIAL_ANALYST: "Санхүүгийн шинжээч",
-            PositionalCategory.FINANCIAL_MARKETS_SPECIALIST: "Санхүүгийн зах зээлийн мэргэжилтэн",
-            PositionalCategory.FINANCIAL_ADMINISTRATION_ASSISTANT: "Санхүүгийн захиргааны туслах",
-            PositionalCategory.FINISHING_WORKS_IN_CONSTRUCTIONS: "Барилгын дуусгалтын ажил",
-            PositionalCategory.FIRE_OFFICER: "Гал түймэрийн ажилтан",
-            PositionalCategory.FIREFIGHTER_RESCUER: "Гал унтраагч, Аврагч",
-            PositionalCategory.FITNESS_INSTRUCTOR: "Фитнессийн зааварлагч",
-            PositionalCategory.FITTER_ASSEMBLER: "Угсрагч",
-            PositionalCategory.FLIGHT_ATTENDANT: "Нислэгийн бүртгэгч",
-            PositionalCategory.FLOOR_LAYER_PAVER: "Шалны тавигч",
-            PositionalCategory.FLORIST: "Цэцгийн дэлгүүрийн ажилтан",
-            PositionalCategory.FOOD_ENGINEER: "Хүнсний инженер",
-            PositionalCategory.FOOD_TECHNICIAN: "Хүнсний техникч",
-            PositionalCategory.FOOD_TECHNOLOGIST: "Хүнсний технологич",
-            PositionalCategory.FOREST_ENGINEER: "Ойн инженер",
-            PositionalCategory.FOREST_TECHNICIAN: "Ойн техникч",
-            PositionalCategory.FORESTER: "Ойч",
-            PositionalCategory.FORESTRY_MANAGER: "Ойн аж ахуйн менежер",
-            PositionalCategory.FOREMAN: "Ахлах ажилтан",
-            PositionalCategory.FORKLIFT_TRUCK_OPERATOR: "Форклифтийн оператор",
-            PositionalCategory.FORWARDER: "Экспедитор",
-            PositionalCategory.FOUNDRY_WORKER: "Цутгалтын ажилтан",
-            PositionalCategory.FRONTEND_DEVELOPER: "Фронтэнд хөгжүүлэгч",
-            PositionalCategory.FUNERAL_SERVICE_WORKER: "Оршуулгын үйлчилгээний ажилтан",
-            PositionalCategory.GAME_DESIGNER: "Тоглоомын дизайнер",
-            PositionalCategory.GAME_DEVELOPER: "Тоглоомын хөгжүүлэгч",
-            PositionalCategory.GARDENER: "Цэцэрлэгч",
-            PositionalCategory.GENERAL_LABOURER: "Ерөнхий хөдөлмөрчин",
-            PositionalCategory.GENERAL_STATE_ADVISOR: "Улсын ерөнхий зөвлөх",
-            PositionalCategory.GEOGRAPHIC_INFORMATION_SYSTEMS_ENGINEER: "Газарзүйн мэдээллийн системийн инженер",
-            PositionalCategory.GEOLOGIST: "Геологич",
-            PositionalCategory.GEOTECHNICAL_INVESTIGATOR: "Геотехникийн судлаач",
-            PositionalCategory.GLASSMAKER: "Шилчин",
-            PositionalCategory.GO_DEVELOPER: "Go хөгжүүлэгч",
-            PositionalCategory.GOLDSMITH_JEWELLER: "Алтны дархан, Үнэт эдлэлч",
-            PositionalCategory.GRAIN_RECEIVER: "Үр тарианы хүлээн авагч",
-            PositionalCategory.GRAPHIC: "График",
-            PositionalCategory.GRAPHIC_DESIGNER: "График дизайнер",
-            PositionalCategory.GUIDE_IN_THE_MUSEUM_GALLERY_CASTLE: "Музей, галерей, цайзны хөтөч",
-            PositionalCategory.HR_ASSISTANT: "Хүний нөөцийн туслах",
-            PositionalCategory.HR_BUSINESS_PARTNER: "Хүний нөөцийн бизнес түнш",
-            PositionalCategory.HR_CONSULTANT: "Хүний нөөцийн зөвлөх",
-            PositionalCategory.HR_COORDINATOR: "Хүний нөөцийн зохицуулагч",
-            PositionalCategory.HR_GENERALIST: "Хүний нөөцийн ерөнхий мэргэжилтэн",
-            PositionalCategory.HR_MANAGER: "Хүний нөөцийн менежер",
-            PositionalCategory.HR_OFFICER: "Хүний нөөцийн ажилтан",
-            PositionalCategory.HAIRDRESSER: "Үсчин",
-            PositionalCategory.HEAD_NURSE: "Ахлах сувилагч",
-            PositionalCategory.HEAD_PHARMACIST: "Ахлах эм зүйч",
-            PositionalCategory.HEAD_OF_CUSTOMER_SUPPORT: "Үйлчлүүлэгчийн дэмжлэгийн дарга",
-            PositionalCategory.HEAD_OF_TECHNICAL_DEPARTMENT: "Техникийн хэлтсийн дарга",
-            PositionalCategory.HEAD_OF_VEHICLE_TECHNICAL_INSPECTION: "Тээврийн хэрэгслийн техникийн үзлэгийн дарга",
-            PositionalCategory.HEAD_OF_CONTROLLING: "Хяналтын хэлтсийн дарга",
-            PositionalCategory.HEAD_OF_PRODUCT_DEVELOPMENT: "Бүтээгдэхүүн хөгжүүлэлтийн дарга",
-            PositionalCategory.HEAD_OF_THE_LEGAL_DEPARTMENT: "Хуулийн хэлтсийн дарга",
-            PositionalCategory.HEALTH_CARE_ASSISTANT: "Эрүүл мэндийн тусламжийн ажилтан",
-            PositionalCategory.HEALTH_CARE_PURCHASING_SPECIALIST: "Эрүүл мэндийн худалдан авалтын мэргэжилтэн",
-            PositionalCategory.HEALTH_PROGRAM_DEVELOPMENT_SPECIALIST: "Эрүүл мэндийн хөтөлбөр хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.HEALTH_AND_SAFETY_OFFICER: "Эрүүл мэнд, Аюулгүй байдлын ажилтан",
-            PositionalCategory.HELPDESK_OPERATOR: "Тусламжийн ширээний оператор",
-            PositionalCategory.HOSTESS: "Хостесс",
-            PositionalCategory.HOTEL_PORTER: "Зочид буудлын портье",
-            PositionalCategory.HOTEL_MANAGER: "Зочид буудлын менежер",
-            PositionalCategory.HOUSEKEEPER: "Гэрийн үйлчлэгч",
-            PositionalCategory.HOUSEKEEPING_SUPERVISOR: "Гэр ахуйн ажлын ахлагч",
-            PositionalCategory.HOUSEMAN: "Гэрийн ажилтан",
-            PositionalCategory.IC_DESIGN_ENGINEER: "IC зураг төслийн инженер",
-            PositionalCategory.ICT_SPECIALIST: "МХТ-ийн мэргэжилтэн",
-            PositionalCategory.IFRS_SPECIALIST: "НББОУС-ийн мэргэжилтэн",
-            PositionalCategory.ISO_SPECIALIST: "ISO мэргэжилтэн",
-            PositionalCategory.IT_ANALYST: "МТ-ийн шинжээч",
-            PositionalCategory.IT_ARCHITECT: "МТ-ийн архитектор",
-            PositionalCategory.IT_BUSINESS_ANALYST: "МТ-ийн бизнес шинжээч",
-            PositionalCategory.IT_CONSULTANT: "МТ-ийн зөвлөх",
-            PositionalCategory.IT_DIRECTOR: "МТ-ийн захирал",
-            PositionalCategory.IT_MANAGER: "МТ-ийн менежер",
-            PositionalCategory.IT_NETWORK_ADMINISTRATOR: "МТ-ийн сүлжээний администратор",
-            PositionalCategory.IT_PRODUCT_MANAGER: "МТ-ийн бүтээгдэхүүний менежер",
-            PositionalCategory.IT_PROJECT_MANAGER: "МТ-ийн төслийн менежер",
-            PositionalCategory.IT_SECURITY_SPECIALIST: "МТ-ийн аюулгүй байдлын мэргэжилтэн",
-            PositionalCategory.IT_SYSTEM_ADMINISTRATOR: "МТ-ийн системийн администратор",
-            PositionalCategory.IT_TESTER: "МТ-ийн тестер",
-            PositionalCategory.IT_AUDITOR: "МТ-ийн аудитор",
-            PositionalCategory.IT_TESTER_AUTOMATED_TESTS: "МТ-ийн тестер - автомат тест",
-            PositionalCategory.IT_TECHNICAL_SUPPORT_SPECIALIST: "МТ/Техникийн дэмжлэгийн мэргэжилтэн",
-            PositionalCategory.IMAGE_STYLIST_BEAUTY_STYLIST: "Дүр төрхийн стилист, Гоо сайханы стилист",
-            PositionalCategory.IMPORT_EXPORT_OFFICER: "Импорт/экспортын ажилтан",
-            PositionalCategory.INCIDENT_MANAGER: "Аваарын менежер",
-            PositionalCategory.INDEPENDENT_ADVISOR: "Бие даасан зөвлөх",
-            PositionalCategory.INDEPENDENT_EXPERT_ASSOCIATE: "Бие даасан мэргэжилтэн",
-            PositionalCategory.INDEPENDENT_OFFICIAL: "Бие даасан албан тушаалтан",
-            PositionalCategory.INDUSTRIAL_CLIMBER: "Үйлдвэрийн альпинист",
-            PositionalCategory.INDUSTRIAL_PAINTER: "Үйлдвэрийн будагч",
-            PositionalCategory.INSPECTOR: "Байцаагч",
-            PositionalCategory.INSURANCE_BROKER: "Даатгалын брокер",
-            PositionalCategory.INSURANCE_PAYMENT_CONTROL_SPECIALIST: "Даатгалын төлбөрийн хяналтын мэргэжилтэн",
-            PositionalCategory.INSURANCE_TECHNICIAN: "Даатгалын техникч",
-            PositionalCategory.INSURANCE_UNDERWRITER: "Даатгалын андеррайтер",
-            PositionalCategory.INSURANCE_ADMINISTRATOR: "Даатгалын администратор",
-            PositionalCategory.INTERIOR_DESIGNER: "Интерьер дизайнер",
-            PositionalCategory.INTERNAL_AUDITOR: "Дотоод аудитор",
-            PositionalCategory.INTERNAL_COMMUNICATION_SPECIALIST: "Дотоод харилцааны мэргэжилтэн",
-            PositionalCategory.INTERPRETER: "Орчуулагч",
-            PositionalCategory.INVOICING_AND_PAYMENT_SPECIALIST: "Нэхэмжлэх, Төлбөрийн мэргэжилтэн",
-            PositionalCategory.IRON_FOUNDER: "Төмрийн цутгагч",
-            PositionalCategory.IRONWORKER: "Төмөрчин",
-            PositionalCategory.JAVA_PROGRAMMER: "Java программист",
-            PositionalCategory.JAVASCRIPT_PROGRAMMER: "Javascript программист",
-            PositionalCategory.JOINER: "Модон эдлэлчин",
-            PositionalCategory.JUDGE: "Шүүгч",
-            PositionalCategory.JUDICIAL_ASSISTANT: "Шүүхийн туслах",
-            PositionalCategory.JUNIOR_ACCOUNTANT: "Дэд нягтлан бодогч",
-            PositionalCategory.JUNIOR_ARCHITECT: "Дэд архитектор",
-            PositionalCategory.JUNIOR_GRAPHIC_DESIGNER: "Дэд график дизайнер",
-            PositionalCategory.JUNIOR_PROJECT_MANAGER: "Дэд төслийн менежер",
-            PositionalCategory.JUNIOR_SALES_REPRESENTATIVE: "Дэд борлуулалтын төлөөлөгч",
-            PositionalCategory.JUNIOR_STATISTICIAN: "Дэд статистикч",
-            PositionalCategory.KEY_ACCOUNT_MANAGER: "Гол дансны менежер",
-            PositionalCategory.KINETOTHERAPIST: "Кинетотерапевт",
-            PositionalCategory.KITCHEN_DESIGNER: "Гал тогооны дизайнер",
-            PositionalCategory.KITCHEN_HELPER: "Гал тогооны туслах",
-            PositionalCategory.LABORATORY_DIRECTOR: "Лабораторийн захирал",
-            PositionalCategory.LABORATORY_TECHNICIAN: "Лабораторийн техникч",
-            PositionalCategory.LAND_SURVEYOR_GEODESIST: "Газрын хэмжигч/Геодезист",
-            PositionalCategory.LANDSCAPE_ARCHITECT: "Ландшафтын архитектор",
-            PositionalCategory.LATHE_OPERATOR: "Токарь оператор",
-            PositionalCategory.LABOURER: "Хөдөлмөрчин",
-            PositionalCategory.LAWYER: "Хуульч",
-            PositionalCategory.LEAD_DEVELOPER: "Ахлах хөгжүүлэгч",
-            PositionalCategory.LEASING_CONSULTANT: "Лизингийн зөвлөх",
-            PositionalCategory.LEASING_DIRECTOR: "Лизингийн захирал",
-            PositionalCategory.LECTOR: "Лектор",
-            PositionalCategory.LECTURER_TRAINER: "Лектор, Сургагч",
-            PositionalCategory.LEGAL_ADVISOR: "Хуулийн зөвлөх",
-            PositionalCategory.LIBRARIAN: "Номын сангийн ажилтан",
-            PositionalCategory.LIFEGUARD_SWIMMING_INSTRUCTOR: "Аврагч, Усны спортын зааварлагч",
-            PositionalCategory.LIGHTING_TECHNICIAN: "Гэрлийн техникч",
-            PositionalCategory.LIVESTOCK_SPECIALIST: "Мал аж ахуйн мэргэжилтэн",
-            PositionalCategory.LOAN_SPECIALIST: "Зээлийн мэргэжилтэн",
-            PositionalCategory.LOGISTICS_CLERK: "Логистикийн ажилтан",
-            PositionalCategory.LOGISTICS_CONTROLLER: "Логистикийн хянагч",
-            PositionalCategory.LOGISTICS_DIRECTOR: "Логистикийн захирал",
-            PositionalCategory.LOGISTICS_MANAGER: "Логистикийн менежер",
-            PositionalCategory.LORRY_DRIVER: "Ачааны машины жолооч",
-            PositionalCategory.LOSS_ADJUSTER: "Алдагдлын үнэлгээч",
-            PositionalCategory.LUMBERJACK: "Модчин",
-            PositionalCategory.MACHINE_FITTER: "Машины угсрагч",
-            PositionalCategory.MACHINE_OPERATOR: "Машины оператор",
-            PositionalCategory.MACHINE_OPERATOR_MACHINIST: "Машины оператор, Машинист",
-            PositionalCategory.MACHINE_SETTER: "Машины тохируулагч",
-            PositionalCategory.MAINENTENANCE_WORKER: "Засвар үйлчилгээний ажилтан",
-            PositionalCategory.MAINTENANCE_ENGINEER: "Засвар үйлчилгээний инженер",
-            PositionalCategory.MAINTENANCE_SUPERVISOR: "Засвар үйлчилгээний ахлагч",
-            PositionalCategory.MAINTENANCE_WORKER: "Засвар үйлчилгээний ажилтан",
-            PositionalCategory.MAKE_UP_ARTIST_WIGMAKER: "Гримчин, Үсний дизайнер",
-            PositionalCategory.MANAGING_DIRECTOR: "Гүйцэтгэх захирал",
-            PositionalCategory.MANAGING_EDITOR: "Менежер редактор",
-            PositionalCategory.MARITIME_TRANSPORT_ORGANISER: "Далайн тээврийн зохион байгуулагч",
-            PositionalCategory.MARKETING_ANALYST: "Маркетингийн шинжээч",
-            PositionalCategory.MARKETING_DIRECTOR: "Маркетингийн захирал",
-            PositionalCategory.MARKETING_MANAGER: "Маркетингийн менежер",
-            PositionalCategory.MARKETING_OFFICER: "Маркетингийн ажилтан",
-            PositionalCategory.MARKETING_SPECIALIST: "Маркетингийн мэргэжилтэн",
-            PositionalCategory.MARKETING_ASSISTANT: "Маркетингийн туслах",
-            PositionalCategory.MASTER_IN_VOCATIONAL_EDUCATION: "Мэргэжлийн боловсролын мастер",
-            PositionalCategory.MASSEUR: "Массажист",
-            PositionalCategory.MECHANICAL_DESIGN_ENGINEER_AUTOMATION: "Механик зураг төслийн инженер - Автоматжуулалт",
-            PositionalCategory.MECHANICAL_ENGINEER: "Механик инженер",
-            PositionalCategory.MECHANIZATION_MANAGER: "Механикжуулалтын менежер",
-            PositionalCategory.MEDIA_BUYER: "Медиа худалдан авагч",
-            PositionalCategory.MEDIA_PLANNER: "Медиа төлөвлөгч",
-            PositionalCategory.MEDICAL_ADVISOR: "Анагаах ухааны зөвлөх",
-            PositionalCategory.MEDICAL_INSTITUTION_MANAGER: "Эмнэлгийн байгууллагын менежер",
-            PositionalCategory.MEDICAL_LABORATORY_TECHNICIAN: "Анагаах ухааны лабораторийн техникч",
-            PositionalCategory.MEDICAL_ORDERLY: "Эмнэлгийн санитар",
-            PositionalCategory.MEDICAL_RECORDS_CLERK: "Эмнэлгийн бүртгэлийн ажилтан",
-            PositionalCategory.MEDICAL_ASSISTANT: "Эмнэлгийн туслах",
-            PositionalCategory.MEDICAL_GRADUATE: "Анагаахын төгсөгч",
-            PositionalCategory.MEDICAL_PHARMACEUTICAL_SALES_REPRESENTATIVE: "Анагаах/Эмийн борлуулалтын төлөөлөгч",
-            PositionalCategory.MECHATRONICS_TECHNICIAN: "Мехатроникийн техникч",
-            PositionalCategory.METALLURGIST: "Металлургич",
-            PositionalCategory.METALLURGY_ENGINEER: "Металлургийн инженер",
-            PositionalCategory.METALWORKER: "Металлчин",
-            PositionalCategory.METEOROLOGIST: "Цаг уурч",
-            PositionalCategory.METROLOGIST: "Метрологич",
-            PositionalCategory.MICROBIOLOGIST: "Микробиологич",
-            PositionalCategory.MICROCONTROLLER_PROGRAMMER: "Микроконтроллерийн программист",
-            PositionalCategory.MIDWIFE: "Акушер",
-            PositionalCategory.MILKER: "Сааль саагч",
-            PositionalCategory.MILLING_MACHINE_OPERATOR: "Фрезийн машины оператор",
-            PositionalCategory.MINER: "Уурхайч",
-            PositionalCategory.MINING_ENGINEER: "Уул уурхайн инженер",
-            PositionalCategory.MINING_MANAGER: "Уул уурхайн менежер",
-            PositionalCategory.MINING_TECHNICIAN: "Уул уурхайн техникч",
-            PositionalCategory.MOBILE_NETWORK_DEVELOPMENT_SPECIALIST: "Гар утасны сүлжээ хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.MODEL: "Загварчин",
-            PositionalCategory.MORTGAGE_SPECIALIST: "Ипотекийн мэргэжилтэн",
-            PositionalCategory.MUSIC_AND_ART_SCHOOL_TEACHER: "Хөгжим, Урлагийн сургуулийн багш",
-            PositionalCategory.NANNY: "Хүүхэд харагч",
-            PositionalCategory.NAVAL_OFFICER: "Тэнгисийн офицер",
-            PositionalCategory.NETWORK_MODELLING_SPECIALIST: "Сүлжээний загварчлалын мэргэжилтэн",
-            PositionalCategory.NETWORK_STRATEGY_SPECIALIST: "Сүлжээний стратегийн мэргэжилтэн",
-            PositionalCategory.NETWORK_AND_SERVICE_OPERATION_SPECIALIST: "Сүлжээ ба үйлчилгээний үйл ажиллагааны мэргэжилтэн",
-            PositionalCategory.NOTARY: "Нотариат",
-            PositionalCategory.NOTARY_ASSOCIATE: "Нотариатын туслах",
-            PositionalCategory.NURSE: "Сувилагч",
-            PositionalCategory.NURSERY_SCHOOL_TEACHER_ASSISTANT: "Цэцэрлэгийн багшийн туслах",
-            PositionalCategory.NUTRITION_ASSISTANT: "Хоол тэжээлийн туслах",
-            PositionalCategory.OSS_BSS_SPECIALIST: "OSS/BSS мэргэжилтэн",
-            PositionalCategory.OBJECTIVE_C_PROGRAMMER: "Objective-C программист",
-            PositionalCategory.OCCUPATIONAL_PSYCHOLOGIST: "Хөдөлмөрийн сэтгэл зүйч",
-            PositionalCategory.OCCUPATIONAL_HEALTH_NURSE: "Хөдөлмөрийн эрүүл мэндийн сувилагч",
-            PositionalCategory.OFFICE_MANAGER: "Оффисын менежер",
-            PositionalCategory.OFFICIAL: "Албан тушаалтан",
-            PositionalCategory.ONLINE_SHOP_ADMINISTRATOR: "Онлайн дэлгүүрийн администратор",
-            PositionalCategory.OPERATIONS_MANAGER: "Үйл ажиллагааны менежер",
-            PositionalCategory.OPERATIONS_SUPERVISOR: "Үйл ажиллагааны ахлагч",
-            PositionalCategory.OPTOMETRIST: "Оптометрист",
-            PositionalCategory.ORACLE_PROGRAMMER: "Oracle программист",
-            PositionalCategory.ORGANIZER: "Зохион байгуулагч",
-            PositionalCategory.ORTHOPEDIC_TECHNICIAN: "Ортопедийн техникч",
-            PositionalCategory.PHP_PROGRAMMER: "PHP программист",
-            PositionalCategory.PLC_PROGRAMMER: "PLC программист",
-            PositionalCategory.PPC_SPECIALIST: "PPC мэргэжилтэн",
-            PositionalCategory.PR_MANAGER: "PR менежер",
-            PositionalCategory.PC_TECHNICIAN: "Компьютерийн техникч",
-            PositionalCategory.PACKER: "Савлагч",
-            PositionalCategory.PAINTER: "Будагч",
-            PositionalCategory.PARALEGAL_LAW_STUDENT: "Хуулийн туслах - хуулийн оюутан",
-            PositionalCategory.PASTRY_CHEF_CONFECTIONER: "Бялуучин, Чихэрлэг хоолны тогооч",
-            PositionalCategory.PAYROLL_CLERK: "Цалингийн ажилтан",
-            PositionalCategory.PEDAGOGUE: "Багш, Сурган хүмүүжүүлэгч",
-            PositionalCategory.PEDICURIST_MANICURIST_NAIL_TECHNICIAN: "Педикюрист, Маникюрист, Хумсны техникч",
-            PositionalCategory.PERL_PROGRAMMER: "Perl программист",
-            PositionalCategory.PERSONAL_BANKER: "Хувийн банкир",
-            PositionalCategory.PERSONNEL_MANAGER: "Персоналийн менежер",
-            PositionalCategory.PETROL_STATION_ATTENDANT: "Шатахуун түгээгч",
-            PositionalCategory.PETROLEUM_ENGINEER: "Газрын тосны инженер",
-            PositionalCategory.PHARMACEUTICAL_LABORATORY_TECHNICIAN: "Эмийн лабораторийн техникч",
-            PositionalCategory.PHARMACEUTICAL_PRODUCTS_MANAGER: "Эмийн бүтээгдэхүүний менежер",
-            PositionalCategory.PHARMACIST: "Эм зүйч",
-            PositionalCategory.PHARMACIST_ASSISTANT: "Эм зүйчийн туслах",
-            PositionalCategory.PHOTO_EDITOR: "Фото редактор",
-            PositionalCategory.PHOTOGRAPHER: "Гэрэл зурагчин",
-            PositionalCategory.PHYSIOTHERAPIST: "Физик эмчилгээч",
-            PositionalCategory.PICKER: "Сонгогч",
-            PositionalCategory.PILOT: "Нисгэгч",
-            PositionalCategory.PIPE_FITTER: "Хоолойчин",
-            PositionalCategory.PIZZA_COOK: "Пицца тогооч",
-            PositionalCategory.PLANNING_ASSISTANT: "Төлөвлөлтийн туслах",
-            PositionalCategory.PLANT_MANAGER: "Үйлдвэрийн менежер",
-            PositionalCategory.PLUMBER: "Сантехникч",
-            PositionalCategory.POLICE_INSPECTOR: "Цагдаагийн байцаагч",
-            PositionalCategory.POLICE_OFFICER: "Цагдаа",
-            PositionalCategory.POSTAL_DELIVERY_WORKER: "Шуудангийн хүргэлтийн ажилтан",
-            PositionalCategory.POSTAL_WORKER: "Шуудангийн ажилтан",
-            PositionalCategory.POSTMASTER: "Шуудангийн дарга",
-            PositionalCategory.POWER_ENGINEER: "Эрчим хүчний инженер",
-            PositionalCategory.POWER_GENERATING_MACHINERY_OPERATOR: "Эрчим хүч үйлдвэрлэх машины оператор",
-            PositionalCategory.PRE_SCHOOL_SCHOOL_KINDERGARDER_NURSE: "Сургуулийн өмнөх боловсролын/Цэцэрлэгийн сувилагч",
-            PositionalCategory.PRESCHOOL_TEACHER: "Цэцэрлэгийн багш",
-            PositionalCategory.PRIMARY_SCHOOL_TEACHER: "Бага сургуулийн багш",
-            PositionalCategory.PRIEST: "Лам, Санваартан",
-            PositionalCategory.PRINTER: "Хэвлэгч",
-            PositionalCategory.PRINTING_TECHNICIAN: "Хэвлэлийн техникч",
-            PositionalCategory.PRISON_OFFICER: "Шорон хорих газрын ажилтан",
-            PositionalCategory.PRIVATE_BANKER: "Хувийн банкир",
-            PositionalCategory.PROBLEM_MANAGER: "Асуудлын менежер",
-            PositionalCategory.PROCESS_ENGINEER: "Процессын инженер",
-            PositionalCategory.PROCESS_MANAGER: "Процессын менежер",
-            PositionalCategory.PROCUREMENT_SPECIALIST: "Худалдан авалтын мэргэжилтэн",
-            PositionalCategory.PRODUCER: "Продюсер",
-            PositionalCategory.PRODUCT_DEVELOPMENT_SPECIALIST: "Бүтээгдэхүүн хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.PRODUCT_MANAGER_SPECIALIST: "Бүтээгдэхүүний менежер - Мэргэжилтэн",
-            PositionalCategory.PRODUCT_MARKETING_MANAGER: "Бүтээгдэхүүний маркетингийн менежер",
-            PositionalCategory.PRODUCT_OWNER: "Бүтээгдэхүүний эзэн",
-            PositionalCategory.PRODUCTION_DIRECTOR: "Үйлдвэрлэлийн захирал",
-            PositionalCategory.PRODUCTION_MANAGER: "Үйлдвэрлэлийн менежер",
-            PositionalCategory.PRODUCTION_PLANNER: "Үйлдвэрлэлийн төлөвлөгч",
-            PositionalCategory.PRODUCTION_STANDARD_SETTER: "Үйлдвэрлэлийн стандарт тогтоогч",
-            PositionalCategory.PRODUCTION_SUPERVISOR: "Үйлдвэрлэлийн ахлагч",
-            PositionalCategory.PROFESSOR: "Профессор",
-            PositionalCategory.PROGRAMMER: "Программист",
-            PositionalCategory.PROJECT_ASSISTANT: "Төслийн туслах",
-            PositionalCategory.PROJECT_COORDINATOR: "Төслийн зохицуулагч",
-            PositionalCategory.PROJECT_MANAGER: "Төслийн менежер",
-            PositionalCategory.PROJECT_PLANNER: "Төслийн төлөвлөгч",
-            PositionalCategory.PROMOTIONAL_ASSISTANT: "Сурталчилгааны туслах",
-            PositionalCategory.PROOFREADER: "Эх засагч",
-            PositionalCategory.PROPERTY_MANAGER: "Өмчийн менежер",
-            PositionalCategory.PROSECUTOR: "Прокурор",
-            PositionalCategory.PSYCHOLOGIST: "Сэтгэл зүйч",
-            PositionalCategory.PUBLIC_HEALTH_ADMINISTRATOR: "Нийгмийн эрүүл мэндийн администратор",
-            PositionalCategory.PUBLISHING_HOUSE_DIRECTOR: "Хэвлэлийн газрын захирал",
-            PositionalCategory.PURCHASING_MANAGER: "Худалдан авалтын менежер",
-            PositionalCategory.PYTHON_PROGRAMMER: "Python программист",
-            PositionalCategory.QUALITY_CONTROL_ISO_MANAGER: "Чанарын хяналт/ISO менежер",
-            PositionalCategory.QUALITY_ENGINEER: "Чанарын инженер",
-            PositionalCategory.QUALITY_INSPECTOR: "Чанарын байцаагч",
-            PositionalCategory.QUALITY_MANAGER: "Чанарын менежер",
-            PositionalCategory.QUALITY_PLANNER: "Чанарын төлөвлөгч",
-            PositionalCategory.QUALIFIED_MECHANICAL_ENGINEER: "Мэргэшсэн механик инженер",
-            PositionalCategory.QUANTITY_SURVEYOR: "Тооцооны инженер",
-            PositionalCategory.R_PROGRAMMER: "R программист",
-            PositionalCategory.RADIO_NETWORK_OPTIMIZATION_SPECIALIST: "Радио сүлжээний оновчлолын мэргэжилтэн",
-            PositionalCategory.RADIO_NETWORK_PLANNING_SPECIALIST: "Радио сүлжээний төлөвлөлтийн мэргэжилтэн",
-            PositionalCategory.RADIO_PRESENTER_AND_ANNOUNCER: "Радиогийн нэвтрүүлэгч",
-            PositionalCategory.RADIOGRAPHER: "Рентген зурагч",
-            PositionalCategory.RADIOLOGY_ASSISTANT: "Радиологийн туслах",
-            PositionalCategory.RAIL_TRANSPORT_CONTROLLER_SHUNTER_SIGNALIST: "Төмөр замын хяналтын ажилтан (шунтер, сигналист)",
-            PositionalCategory.REAL_ESTATE_APPRAISER: "Үл хөдлөх хөрөнгийн үнэлгээч",
-            PositionalCategory.REAL_ESTATE_MAINTENANCE: "Үл хөдлөх хөрөнгийн засвар үйлчилгээ",
-            PositionalCategory.RECEPTIONIST: "Хүлээн авалтын ажилтан",
-            PositionalCategory.RECEPTIONIST_I: "Хүлээн авалтын ажилтан I",
-            PositionalCategory.RECRUITER: "Элсэлтийн ажилтан",
-            PositionalCategory.REFRIGERATION_MECHANIC: "Хөргөлтийн механик",
-            PositionalCategory.REGIONAL_AREA_MANAGER: "Бүсийн менежер",
-            PositionalCategory.REGIONAL_MANAGER: "Бүсийн менежер",
-            PositionalCategory.REGISTRY_ADMINISTRATION_OFFICER: "Бүртгэлийн захиргааны ажилтан",
-            PositionalCategory.REGULATORY_AFFAIRS_MANAGER: "Зохицуулалтын асуудлын менежер",
-            PositionalCategory.REGULATORY_AFFAIRS_SPECIALIST: "Зохицуулалтын асуудлын мэргэжилтэн",
-            PositionalCategory.REINSURANCE_SPECIALIST: "Дахин даатгалын мэргэжилтэн",
-            PositionalCategory.RELATIONSHIP_MANAGER: "Харилцааны менежер",
-            PositionalCategory.REPORTER: "Сурвалжлагч",
-            PositionalCategory.REPORTING_SPECIALIST: "Тайлангийн мэргэжилтэн",
-            PositionalCategory.REPAIRER: "Засварч",
-            PositionalCategory.RESEARCH_PHYSICIAN: "Судалгааны эмч",
-            PositionalCategory.RESEARCH_WORKER_SCIENTIFIC_WORKER: "Судалгааны ажилтан, Шинжлэх ухааны ажилтан",
-            PositionalCategory.RESTAURANT_MANAGER: "Ресторанны менежер",
-            PositionalCategory.RESTAURANT_WORKER: "Ресторанны ажилтан",
-            PositionalCategory.RESTORER_CONSERVATOR: "Сэргээн засварлагч",
-            PositionalCategory.RETAIL_STORE_MANAGER: "Жижиглэн худалдааны дэлгүүрийн менежер",
-            PositionalCategory.RETURNS_DEPARTMENT_MANAGER: "Буцаалтын хэлтсийн менежер",
-            PositionalCategory.RISK_MANAGER: "Рискийн менежер",
-            PositionalCategory.RISK_SPECIALIST: "Рискийн мэргэжилтэн",
-            PositionalCategory.ROAMING_SPECIALIST: "Роамингийн мэргэжилтэн",
-            PositionalCategory.ROOFER: "Дээврийн ажилчин",
-            PositionalCategory.RUBY_DEVELOPER_PROGRAMMER: "Ruby хөгжүүлэгч/программист",
-            PositionalCategory.SAP_SPECIALIST: "SAP мэргэжилтэн",
-            PositionalCategory.SEO_ANALYST: "SEO шинжээч",
-            PositionalCategory.SAFETY_SPECIALIST: "Аюулгүй байдлын мэргэжилтэн",
-            PositionalCategory.SAILOR: "Далайч",
-            PositionalCategory.SALES_CONSULTANT: "Борлуулалтын зөвлөх",
-            PositionalCategory.SALES_DIRECTOR: "Борлуулалтын захирал",
-            PositionalCategory.SALES_ENGINEER: "Борлуулалтын инженер",
-            PositionalCategory.SALES_MANAGER: "Борлуулалтын менежер",
-            PositionalCategory.SALES_OBJECT_MANAGER: "Борлуулалтын объектын менежер",
-            PositionalCategory.SALES_OFFICE_MANAGER: "Борлуулалтын оффисын менежер",
-            PositionalCategory.SALES_OFFICER: "Борлуулалтын ажилтан",
-            PositionalCategory.SALES_REPRESENTATIVE: "Борлуулалтын төлөөлөгч",
-            PositionalCategory.SALES_COORDINATOR: "Борлуулалтын зохицуулагч",
-            PositionalCategory.SAW_FILER: "Хөрөө засагч",
-            PositionalCategory.SCAFFOLDER: "Тулгуур барилгач",
-            PositionalCategory.SCHOOL_CANTEEN_MANAGER: "Сургуулийн гуанзны менежер",
-            PositionalCategory.SCHOOL_CARETAKER: "Сургуулийн харуул хамгаалагч",
-            PositionalCategory.SCHOOL_PRINCIPAL: "Сургуулийн захирал",
-            PositionalCategory.SCRUM_MASTER: "Scrum Мастер",
-            PositionalCategory.SEAMSTRESS: "Оёдолчин",
-            PositionalCategory.SECONDARY_SCHOOL_TEACHER: "Дунд сургуулийн багш",
-            PositionalCategory.SECRETARY: "Нарийн бичгийн дарга",
-            PositionalCategory.SECRETARY_OF_HEALTH_DEPARTMENT: "Эрүүл мэндийн хэлтсийн нарийн бичгийн дарга",
-            PositionalCategory.SECURITY_GUARD: "Харуул хамгаалагч",
-            PositionalCategory.SECURITY_SERVICE_DIRECTOR: "Хамгаалалтын үйлчилгээний захирал",
-            PositionalCategory.SECURITY_SERVICE_MANAGER: "Хамгаалалтын үйлчилгээний менежер",
-            PositionalCategory.SECURITY_SERVICE_TECHNICIAN: "Хамгаалалтын үйлчилгээний техникч",
-            PositionalCategory.SELLER_CASHIER: "Худалдагч / Кассир",
-            PositionalCategory.SELLER_OF_BANK_SERVICES_LOAN_OFFICER: "Банкны үйлчилгээний худалдагч, Зээлийн ажилтан",
-            PositionalCategory.SENIOR_ACCOUNTANT: "Ахлах нягтлан бодогч",
-            PositionalCategory.SENIOR_ASSOCIATE: "Ахлах нэгдэл",
-            PositionalCategory.SENIOR_GRAPHIC_DESIGNER: "Ахлах график дизайнер",
-            PositionalCategory.SENIOR_PROJECT_MANAGER: "Ахлах төслийн менежер",
-            PositionalCategory.SENIOR_SALES_REPRESENTATIVE: "Ахлах борлуулалтын төлөөлөгч",
-            PositionalCategory.SENIOR_STATISTICIAN: "Ахлах статистикч",
-            PositionalCategory.SERVICE_ENGINEER: "Үйлчилгээний инженер",
-            PositionalCategory.SERVICE_TECHNICIAN: "Үйлчилгээний техникч",
-            PositionalCategory.SHELF_STACKER_MERCHANDISER: "Тавиур дүүргэгч/Мерчандайзер",
-            PositionalCategory.SHIFT_MANAGER: "Ээлжийн менежер",
-            PositionalCategory.SHOP_ASSISTANT: "Дэлгүүрийн туслах",
-            PositionalCategory.SHOP_WINDOW_DECORATOR: "Дэлгүүрийн цонхны чимэглэгч",
-            PositionalCategory.SMITH: "Дархан",
-            PositionalCategory.SOCIAL_COUNSELOR: "Нийгмийн зөвлөгч",
-            PositionalCategory.SOCIAL_MEDIA_SPECIALIST: "Нийгмийн сүлжээний мэргэжилтэн",
-            PositionalCategory.SOCIAL_REHABILITATION_SPECIALIST: "Нийгмийн нөхөн сэргээлтийн мэргэжилтэн",
-            PositionalCategory.SOFTWARE_ENGINEER: "Програм хангамжийн инженер",
-            PositionalCategory.SOFTWARE_CONSULTANT: "Програм хангамжийн зөвлөх",
-            PositionalCategory.SOLDIER: "Цэрэг",
-            PositionalCategory.SOLICITOR_BARRISTER: "Өмгөөлөгч",
-            PositionalCategory.SOMMELIER: "Сомелье",
-            PositionalCategory.SOUND_ENGINEER: "Дуу авианы инженер",
-            PositionalCategory.SPA_THERAPIST: "Спа эмчилгээч",
-            PositionalCategory.SPATIAL_PLANNER: "Орон зайн төлөвлөгч",
-            PositionalCategory.SPECIAL_NEEDS_TEACHER: "Тусгай хэрэгцээт боловсролын багш",
-            PositionalCategory.SPECIALIST_ADVISOR: "Мэргэжлийн зөвлөх",
-            PositionalCategory.SPECIALIST_OFFICIAL: "Мэргэжлийн албан тушаалтан",
-            PositionalCategory.SPEECH_THERAPIST: "Логопед",
-            PositionalCategory.SPORTS_COACH: "Спортын дасгалжуулагч",
-            PositionalCategory.SPORTS_COORDINATOR: "Спортын зохицуулагч",
-            PositionalCategory.STAGEHAND: "Тайзны ажилтан",
-            PositionalCategory.STATE_ADVISOR: "Улсын зөвлөх",
-            PositionalCategory.STOCK_BROKER: "Хөрөнгийн брокер",
-            PositionalCategory.STOKER_BOILER_ATTENDANT: "Зуухч",
-            PositionalCategory.STONEMASON: "Чулуучин",
-            PositionalCategory.STORE_DEPARTMENT_MANAGER: "Агуулахын хэлтсийн менежер",
-            PositionalCategory.STOREKEEPER: "Агуулахын ажилтан",
-            PositionalCategory.STRUCTURAL_ENGINEER: "Байгууламжийн инженер",
-            PositionalCategory.SUPERINTENDENT: "Ерөнхий хянагч",
-            PositionalCategory.SUPPLY_CHAIN_SPECIALIST: "Нийлүүлэлтийн гинжийн мэргэжилтэн",
-            PositionalCategory.SUPPLY_TECHNICIAN: "Нийлүүлэлтийн техникч",
-            PositionalCategory.SURVEY_INTERVIEWER: "Судалгааны ярилцлагч",
-            PositionalCategory.SWITCHING_NETWORK_DEVELOPMENT_SPECIALIST: "Шилжүүлэлтийн сүлжээ хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.SYSTEMS_ADMINISTRATOR: "Системийн администратор",
-            PositionalCategory.SYSTEMS_ENGINEER: "Системийн инженер",
-            PositionalCategory.TV_PRESENTER: "ТВ нэвтрүүлэгч",
-            PositionalCategory.TV_FILM_PRODUCTION_ASSISTANT: "ТВ/Киноны үйлдвэрлэлийн туслах",
-            PositionalCategory.TAILOR: "Оёдолчин",
-            PositionalCategory.TAX_ADVISOR: "Татварын зөвлөх",
-            PositionalCategory.TAXI_DRIVER: "Таксины жолооч",
-            PositionalCategory.TEACHER: "Багш",
-            PositionalCategory.TEAM_LEADER: "Багийн ахлагч",
-            PositionalCategory.TECHNICAL_DIRECTOR: "Техникийн захирал",
-            PositionalCategory.TECHNICAL_MANAGER: "Техникийн менежер",
-            PositionalCategory.TECHNICAL_STAFF: "Техникийн ажилтан",
-            PositionalCategory.TECHNICAL_SUPPORT_SPECIALIST: "Техникийн дэмжлэгийн мэргэжилтэн",
-            PositionalCategory.TECHNICAL_WRITER: "Техникийн бичгийн ажилтан",
-            PositionalCategory.TECHNICAL_PRODUCT_ENGINEER: "Техникийн бүтээгдэхүүний инженер",
-            PositionalCategory.TELECOMMUNICATION_SPECIALIST: "Харилцаа холбооны мэргэжилтэн",
-            PositionalCategory.TELECOMMUNICATION_NETWORK_INSTALLER: "Харилцаа холбооны сүлжээ угсрагч",
-            PositionalCategory.TELECOMMUNICATIONS_NETWORK_DESIGNER: "Харилцаа холбооны сүлжээний дизайнер",
-            PositionalCategory.TELECOMMUNICATIONS_PRODUCT_DEVELOPMENT_SPECIALIST: "Харилцаа холбооны бүтээгдэхүүн хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.TELECOMMUNICATIONS_SERVICE_DEVELOPMENT_SPECIALIST: "Харилцаа холбооны үйлчилгээ хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.TELEMARKETER: "Утсаар маркетинг хийгч",
-            PositionalCategory.TERMINAL_OPERATOR: "Терминалийн оператор",
-            PositionalCategory.TESTING_MANAGER: "Туршилтын менежер",
-            PositionalCategory.TECHNICIAN: "Техникч",
-            PositionalCategory.TECHNOLOGIST: "Технологич",
-            PositionalCategory.TILE_MAN: "Хавтанч",
-            PositionalCategory.TIMBER_ENGINEER: "Модон материалын инженер",
-            PositionalCategory.TOOLMAKER: "Хэрэгсэл үйлдвэрлэгч",
-            PositionalCategory.TRAFFIC_CONTROLLER: "Замын хөдөлгөөний хяналтын ажилтан",
-            PositionalCategory.TRAFFIC_ENGINEER: "Замын хөдөлгөөний инженер",
-            PositionalCategory.TRAIN_CONDUCTOR: "Галт тэргний кондуктор",
-            PositionalCategory.TRAIN_DISPATCHER: "Галт тэргний диспетчер",
-            PositionalCategory.TRAINEE_BAILIFF: "Дадлагажигч биелэлтийн ажилтан",
-            PositionalCategory.TRAM_DRIVER: "Трамвайн жолооч",
-            PositionalCategory.TRANSMISSION_NETW_ANALYSIS_DEVELOPMENT_SPECIALIST: "Дамжуулалтын сүлжээний шинжилгээ ба хөгжүүлэлтийн мэргэжилтэн",
-            PositionalCategory.TRANSPORT_MANAGER: "Тээврийн менежер",
-            PositionalCategory.TRAVEL_GUIDE: "Аялалын хөтөч",
-            PositionalCategory.TROLLEYBUS_DRIVER: "Троллейбусны жолооч",
-            PositionalCategory.TUTOR: "Хувийн багш",
-            PositionalCategory.TYRE_FITTER: "Дугуй угсрагч",
-            PositionalCategory.UX_DESIGNER: "UX дизайнер",
-            PositionalCategory.UNIVERSITY_TEACHER: "Их сургуулийн багш",
-            PositionalCategory.UNIVERSITY_TEACHING_ASSISTANT: "Их сургуулийн багшийн туслах",
-            PositionalCategory.UPHOLSTERER: "Эдлэлчин",
-            PositionalCategory.USER_EXPERIENCE_EXPERT: "Хэрэглэгчийн туршлагын мэргэжилтэн",
-            PositionalCategory.VAT_SPECIALIST: "НӨАТ-ийн мэргэжилтэн",
-            PositionalCategory.VFX_ARTIST: "VFX уран бүтээлч",
-            PositionalCategory.VARNISHER: "Лак түрхэгч",
-            PositionalCategory.VEHICLE_BODY_REPAIRER: "Тээврийн хэрэгслийн бие засварч",
-            PositionalCategory.VETERINARIAN: "Малын эмч",
-            PositionalCategory.VETERINARY_TECHNICIAN: "Малын эмнэлгийн техникч",
-            PositionalCategory.VISUAL_MERCHANDISER: "Визуал мерчандайзер",
-            PositionalCategory.WAITER: "Зөөгч",
-            PositionalCategory.WAITER_ROOM_SERVICE: "Зөөгч - Өрөөний үйлчилгээ",
-            PositionalCategory.WARD_DOMESTIC: "Тасгийн гэрийн ажилтан",
-            PositionalCategory.WARDROBE_ASSISTANT: "Хувцасны туслах",
-            PositionalCategory.WAREHOUSE_MANAGER: "Агуулахын менежер",
-            PositionalCategory.WAREHOUSEMAN: "Агуулахч",
-            PositionalCategory.WATER_MANAGEMENT_ENGINEER: "Усны менежментийн инженер",
-            PositionalCategory.WATER_MANAGEMENT_TECHNICIAN: "Усны менежментийн техникч",
-            PositionalCategory.WEB_DESIGNER: "Веб дизайнер",
-            PositionalCategory.WEBMASTER: "Вебмастер",
-            PositionalCategory.WELDER: "Гагнуурч",
-            PositionalCategory.WINDOW_DRESSER_DECORATOR: "Цонхны чимэглэгч",
-            PositionalCategory.WOODWORKING_TECHNICIAN: "Модон эдлэлийн техникч",
-            PositionalCategory.YOUTH_WORKER: "Залуучуудын ажилтан",
-            PositionalCategory.IOS_DEVELOPER: "iOS хөгжүүлэгч",
-            PositionalCategory.OTHER: "Бусад",
-        }
-        return names.get(self, self.value)
+        return self._mongolian_names().get(self, self.value)
 
 
 class JobClassificationInput(BaseModel):
@@ -1759,26 +1775,26 @@ class JobClassificationInput(BaseModel):
 class JobClassificationOutput(BaseModel):
     """Output data for job classification."""
     title: str = Field(..., description="Predicted job title")
-    job_function: JobFunctionCategory = Field(..., description="Predicted job function category")
-    job_industry: JobIndustryCategory = Field(..., description="Predicted job industry category")
-    category: Category = Field(..., description="Predicted Paylab industry/sector category")
-    positional_category: PositionalCategory = Field(..., description="Predicted Paylab positional/job title category")
-    job_level: UnifiedJobLevelCategory = Field(..., description="Predicted unified job level category")
+    job_function: str = Field(..., description="Predicted job function category")
+    job_industry: str = Field(..., description="Predicted job industry category")
+    category: str = Field(..., description="Predicted Paylab industry/sector category")
+    positional_category: str = Field(..., description="Predicted Paylab positional/job title category")
+    job_level: str = Field(..., description="Predicted unified job level category")
     salary_min: int= Field(..., description="Minimum salary in MNT based on classification input or estimation")
     salary_max: int = Field(..., description="Maximum salary in MNT based on classification input or estimation")
-    experience_level: ExperienceLevel = Field(..., description="Predicted experience level category")
-    education_level: EducationLevel = Field(..., description="Predicted education level category")
+    experience_level: str = Field(..., description="Predicted experience level category")
+    education_level: str = Field(..., description="Predicted education level category")
     company_name: Optional[str] = Field(None, description="Company or organization name if provided in input")
     requirement_reasoning: str = Field(..., description="Explanation of how the input data led to the predicted classifications. This should be 1 to 3 sentences in Mongolian language.")
-    requirements: List[JobRequirement] = Field(default_factory=list, description="List of identified job requirements", min_length=0, max_length=5)
+    requirements: List[JobRequirement] = Field(default_factory=list, description="List of identified job requirements", min_length=0, max_length=3)
     benefits_reasoning: str = Field(..., description="Explanation of how the input data led to the identified benefits and bonuses. This should be 1 to 3 sentences in Mongolian language.")
-    benefits: List[JobBenefit] = Field(default_factory=list, description="List of identified job benefits and bonuses", min_length=0, max_length=5)
+    benefits: List[JobBenefit] = Field(default_factory=list, description="List of identified job benefits and bonuses", min_length=0, max_length=3)
     confidence_scores: Optional[dict[str, float]] = Field(None, description="Confidence scores for each predicted category")
 
 class JobClassificationPaylabInput(BaseModel):
     """Input data for paylab agent to estimate salary based on job classification output."""
     category: Optional[Category] = Field(None, description="Paylab industry/sector category")
-    positional_category: Optional[PositionalCategory] = Field(None, description="Paylab positional/job title category")
+    positional_category: Optional[str] = Field(None, description="Paylab positional/job title category")
     category_min_salary: int = Field(..., description="Minimum salary in MNT for the predicted job category based on market data")
     category_max_salary: int = Field(..., description="Maximum salary in MNT for the predicted job category based on market data")
     title: str = Field(..., description="Predicted job title from classification output")
@@ -1854,32 +1870,76 @@ class JobClassifierAgentConfig(BaseModel):
 
 
 
-class JobClassifierAgent(Agent):
+class JobClassifierAgent:
     """Agent for classifying job listings into various categories and extracting requirements and benefits."""
-    config: JobClassifierAgentConfig
+
+    # Pre-computed taxonomy JSON (shared across all instances, built once)
+    _taxonomy_json: Optional[dict] = None
+    # Pre-computed normalized positional index: normalized_value -> PositionalCategory
+    _positional_index: Optional[dict[str, PositionalCategory]] = None
+    # Pre-computed normalized industry values
+    _industry_norms: Optional[list[tuple[str, JobIndustryCategory]]] = None
+
     def __init__(self, config: JobClassifierAgentConfig):
         self.config = config
-        self.agent = Agent(model=self.config.model_name, system_prompt=self.config.system_prompt, output_type=JobClassificationOutput)
-        self.batch_agent = Agent(model=self.config.model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
-        self.paylab_agent = Agent(model=self.config.model_name, system_prompt=self.config.system_paylab_prompt, output_type=str)
+        # Cache agents by model name to avoid re-creation on retries
+        self._agent_cache: dict[str, Any] = {}
+
+    @classmethod
+    def _get_taxonomy(cls) -> dict:
+        if cls._taxonomy_json is None:
+            cls._taxonomy_json = {
+                "job_industry_values": [v.value for v in JobIndustryCategory],
+                "job_function_values": [v.value for v in JobFunctionCategory],
+                "job_level_values": [v.value for v in UnifiedJobLevelCategory],
+                "category_values": [v.value for v in Category],
+                "paylab_positional_values": [v.value for v in PositionalCategory],
+                "experience_values": [v.value for v in ExperienceLevel],
+                "education_values": [v.value for v in EducationLevel],
+            }
+        return cls._taxonomy_json
+
+    @classmethod
+    def _get_positional_index(cls) -> dict[str, PositionalCategory]:
+        if cls._positional_index is None:
+            cls._positional_index = {}
+            for cat in PositionalCategory:
+                if cat == PositionalCategory.OTHER:
+                    continue
+                norm = cls._normalize_text(cat.value)
+                cls._positional_index[norm] = cat
+        return cls._positional_index
+
+    @classmethod
+    def _get_industry_norms(cls) -> list[tuple[str, JobIndustryCategory]]:
+        if cls._industry_norms is None:
+            cls._industry_norms = [
+                (cls._normalize_text(ind.value), ind)
+                for ind in JobIndustryCategory
+                if ind != JobIndustryCategory.OTHER
+            ]
+        return cls._industry_norms
 
     def _get_model_candidates(self) -> List[str]:
         candidates = [self.config.model_name, *self.config.fallback_model_names]
-        # preserve order and remove duplicates
+        seen: set[str] = set()
         uniq: list[str] = []
         for model in candidates:
-            if model and model not in uniq:
+            if model and model not in seen:
+                seen.add(model)
                 uniq.append(model)
         return uniq
 
-    def _build_single_agent(self, model_name: str) -> Any:
-        return Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=JobClassificationOutput)
-
-    def _build_batch_agent(self, model_name: str) -> Any:
-        return Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
-
-    def _build_paylab_agent(self, model_name: str) -> Any:
-        return Agent(model=model_name, system_prompt=self.config.system_paylab_prompt, output_type=str)
+    def _get_agent(self, model_name: str, kind: str) -> Agent:
+        key = f"{kind}:{model_name}"
+        if key not in self._agent_cache:
+            if kind == "single":
+                self._agent_cache[key] = Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=JobClassificationOutput)
+            elif kind == "batch":
+                self._agent_cache[key] = Agent(model=model_name, system_prompt=self.config.system_prompt, output_type=List[JobClassificationOutput])
+            elif kind == "paylab":
+                self._agent_cache[key] = Agent(model=model_name, system_prompt=self.config.system_paylab_prompt, output_type=str)
+        return self._agent_cache[key]
 
     @staticmethod
     def _parse_paylab_json_output(raw_text: str) -> List[JobClassificationPaylabOutput]:
@@ -1925,17 +1985,14 @@ class JobClassifierAgent(Agent):
         ]
         merged = self._normalize_text(" ".join(candidate_texts))
         recruiter_norm = self._normalize_text(recruiter_industry)
+        industry_norms = self._get_industry_norms()
 
         if recruiter_norm:
-            for industry in JobIndustryCategory:
-                industry_norm = self._normalize_text(industry.value)
+            for industry_norm, industry in industry_norms:
                 if recruiter_norm == industry_norm or recruiter_norm in industry_norm or industry_norm in recruiter_norm:
                     return industry
 
-        for industry in JobIndustryCategory:
-            if industry == JobIndustryCategory.OTHER:
-                continue
-            industry_norm = self._normalize_text(industry.value)
+        for industry_norm, industry in industry_norms:
             if industry_norm and industry_norm in merged:
                 return industry
 
@@ -1985,12 +2042,13 @@ class JobClassifierAgent(Agent):
 
     def _match_positional_from_title(self, title: str) -> Optional[PositionalCategory]:
         title_norm = self._normalize_text(title)
-        for cat in PositionalCategory:
-            if cat == PositionalCategory.OTHER:
-                continue
-            if self._normalize_text(cat.value) == title_norm:
-                return cat
-            if self._normalize_text(cat.value) in title_norm:
+        index = self._get_positional_index()
+        # Exact match first (O(1) lookup)
+        if title_norm in index:
+            return index[title_norm]
+        # Substring match
+        for norm_value, cat in index.items():
+            if norm_value in title_norm:
                 return cat
         return None
 
@@ -1998,15 +2056,7 @@ class JobClassifierAgent(Agent):
         payload = {
             "classification_priority": ["job_industry", "job_function", "job_level", "category", "positional_category"],
             "job": job_input.model_dump(),
-            "taxonomy": {
-                "job_industry_values": [v.value for v in JobIndustryCategory],
-                "job_function_values": [v.value for v in JobFunctionCategory],
-                "job_level_values": [v.value for v in UnifiedJobLevelCategory],
-                "category_values": [v.value for v in Category],
-                "paylab_positional_values": [v.value for v in PositionalCategory],
-                "experience_values": [v.value for v in ExperienceLevel],
-                "education_values": [v.value for v in EducationLevel],
-            },
+            "taxonomy": self._get_taxonomy(),
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -2018,24 +2068,24 @@ class JobClassifierAgent(Agent):
         inferred_level = self._infer_level_from_title(title)
         inferred_positional = self._match_positional_from_title(title)
 
-        if inferred_industry and output.job_industry == JobIndustryCategory.OTHER:
-            output.job_industry = inferred_industry
+        if inferred_industry and output.job_industry == JobIndustryCategory.OTHER.value:
+            output.job_industry = inferred_industry.value
 
-        if inferred_function and output.job_function == JobFunctionCategory.OTHER:
-            output.job_function = inferred_function
+        if inferred_function and output.job_function == JobFunctionCategory.OTHER.value:
+            output.job_function = inferred_function.value
 
-        if inferred_level and output.job_level in {UnifiedJobLevelCategory.STAFF, UnifiedJobLevelCategory.SPECIALIST}:
+        if inferred_level and output.job_level in {UnifiedJobLevelCategory.STAFF.value, UnifiedJobLevelCategory.SPECIALIST.value}:
             if inferred_level in {UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT, UnifiedJobLevelCategory.SENIOR_MANAGEMENT, UnifiedJobLevelCategory.MIDDLE_MANAGEMENT, UnifiedJobLevelCategory.SPECIALIST_SENIOR}:
-                output.job_level = inferred_level
+                output.job_level = inferred_level.value
 
-        if inferred_positional and output.positional_category == PositionalCategory.OTHER:
-            output.positional_category = inferred_positional
+        if inferred_positional and output.positional_category in {"Other", "other", ""}:
+            output.positional_category = inferred_positional.value
 
-        if output.job_function == JobFunctionCategory.EXECUTIVE_MANAGEMENT and output.job_level in {UnifiedJobLevelCategory.STAFF, UnifiedJobLevelCategory.SPECIALIST}:
-            output.job_level = UnifiedJobLevelCategory.SENIOR_MANAGEMENT
+        if output.job_function == JobFunctionCategory.EXECUTIVE_MANAGEMENT.value and output.job_level in {UnifiedJobLevelCategory.STAFF.value, UnifiedJobLevelCategory.SPECIALIST.value}:
+            output.job_level = UnifiedJobLevelCategory.SENIOR_MANAGEMENT.value
 
-        if output.job_level == UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT and output.job_function == JobFunctionCategory.OTHER:
-            output.job_function = JobFunctionCategory.EXECUTIVE_MANAGEMENT
+        if output.job_level == UnifiedJobLevelCategory.EXECUTIVE_MANAGEMENT.value and output.job_function == JobFunctionCategory.OTHER.value:
+            output.job_function = JobFunctionCategory.EXECUTIVE_MANAGEMENT.value
 
         if output.confidence_scores is None:
             output.confidence_scores = {}
@@ -2058,7 +2108,7 @@ class JobClassifierAgent(Agent):
     async def _run_single_with_fallback(self, payload: str, job_input: JobClassificationInput) -> JobClassificationOutput:
         last_error: Optional[Exception] = None
         for model_name in self._get_model_candidates():
-            agent = self._build_single_agent(model_name)
+            agent = self._get_agent(model_name, "single")
             for attempt in range(self.config.retry_attempts + 1):
                 try:
                     response = await agent.run(payload)
@@ -2081,7 +2131,7 @@ class JobClassifierAgent(Agent):
         last_error: Optional[Exception] = None
 
         for model_name in self._get_model_candidates():
-            agent = self._build_batch_agent(model_name)
+            agent = self._get_agent(model_name, "batch")
             for attempt in range(self.config.retry_attempts + 1):
                 try:
                     result = await agent.run(payloads)
@@ -2147,7 +2197,7 @@ class JobClassifierAgent(Agent):
         
         last_error: Optional[Exception] = None
         for model_name in self._get_model_candidates():
-            agent = self._build_paylab_agent(model_name)
+            agent = self._get_agent(model_name, "paylab")
             for attempt in range(self.config.retry_attempts + 1):
                 try:
                     response = await agent.run(inputs)

@@ -165,7 +165,7 @@ async def get_all_data_and_save(repository):
         recruiter = job.get("recruiter", {}) or {}
         salary = job.get("salary", {}) or {}
         transformed = {
-            "id": _to_optional_str(f"{current_year}_{current_month}_{job.get('id')}") if job.get("id") is not None else None,
+            "id": _to_optional_str(f"{job.get('id')}") if job.get("id") is not None else None,
             "title": _to_optional_str(job.get("title")),
             "description": _to_optional_str(job.get("description")),
             "location": _to_optional_str(job.get("location")),

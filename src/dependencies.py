@@ -70,19 +70,19 @@ def _ensure_tables(base, label: str) -> None:
 
 def get_zangia_sqlalchemy_repository() -> ZangiaJobRepository:
     """Get Zangia job repository."""
-    _ensure_tables(ZangiaBase, "zangia")
+    _ensure_tables(ZangiaBase, "job_zangia")
     return ZangiaJobRepository(_get_session_factory()())
 
 
 def get_lambda_sqlalchemy_repository() -> LambdaJobRepository:
     """Get Lambda Global job repository."""
-    _ensure_tables(LambdaBase, "lambda")
+    _ensure_tables(LambdaBase, "job_lambdas")
     return LambdaJobRepository(_get_session_factory()())
 
 
 def get_classifier_output_repository() -> JobClassificationOutputRepository:
     """Get repository for job classification output."""
-    _ensure_tables(ClassifierBase, "classifier")
+    _ensure_tables(ClassifierBase, "classified_jobs")
     return JobClassificationOutputRepository(_get_session_factory()())
 
 

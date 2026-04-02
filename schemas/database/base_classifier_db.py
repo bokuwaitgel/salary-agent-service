@@ -5,20 +5,20 @@ from sqlalchemy import Column, String, Float, DateTime, Integer, Text
 from sqlalchemy.ext.declarative import declarative_base
 import json
 
-from schemas.base_classifier import Category, EducationLevel, ExperienceLevel, JobBenefit, JobFunctionCategory, JobIndustryCategory, JobRequirement, PositionalCategory, UnifiedJobLevelCategory
+from schemas.base_classifier import JobBenefit, JobRequirement
 
 Base = declarative_base()
 
 class JobClassificationOutput(BaseModel):
     """Output data for job classification."""
     title: str = Field(..., description="Predicted job title")
-    job_industry: JobIndustryCategory = Field(..., description="Predicted job industry category")
-    job_function: JobFunctionCategory = Field(..., description="Predicted job function category")
-    job_level: UnifiedJobLevelCategory = Field(..., description="Predicted unified job level category")
-    category: Optional[Category] = Field(None, description="Predicted Paylab industry/sector category")
-    positional_category: Optional[PositionalCategory] = Field(None, description="Predicted Paylab positional/job title category")
-    experience_level: ExperienceLevel = Field(..., description="Predicted experience level category")
-    education_level: EducationLevel = Field(..., description="Predicted education level category")
+    job_industry: str = Field(..., description="Predicted job industry category")
+    job_function: str = Field(..., description="Predicted job function category")
+    job_level: str = Field(..., description="Predicted unified job level category")
+    category: Optional[str] = Field(None, description="Predicted Paylab industry/sector category")
+    positional_category: Optional[str] = Field(None, description="Predicted Paylab positional/job title category")
+    experience_level: str = Field(..., description="Predicted experience level category")
+    education_level: str = Field(..., description="Predicted education level category")
     salary_min: int= Field(..., description="Minimum salary in MNT based on classification input or estimation")
     salary_max: int = Field(..., description="Maximum salary in MNT based on classification input or estimation")
     company_name: Optional[str] = Field(None, description="Company name if the company belongs to a known holding group")
@@ -32,7 +32,7 @@ class JobClassificationOutput(BaseModel):
 
 
 class JobClassificationOutputTable(Base):
-    __tablename__ = 'job_classification'
+    __tablename__ = 'classified_jobs'
 
     id = Column(String, primary_key=True)
     title = Column(String, nullable=False)
