@@ -29,7 +29,7 @@ async def main():
     repository: LambdaJobRepository = dep
     classifier_output_repository: JobClassificationOutputRepository = dep_classifier_output
     current_year = "2026"
-    current_month = "03"
+    current_month = "04"
     datas = repository.get_by_query(
         (LambdaJobTable.year == current_year) & (LambdaJobTable.month == current_month)
     )
@@ -96,7 +96,8 @@ async def main():
                 "title": output.title,
                 "job_function": output.job_function,
                 "job_industry": output.job_industry,
-                "job_techpack_category": output.job_techpack_category,
+                "category": output.category,
+                "positional_category": output.positional_category,
                 "job_level": output.job_level,
                 "experience_level": output.experience_level,
                 "education_level": output.education_level,

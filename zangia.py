@@ -37,7 +37,7 @@ async def main():
     
     #current month 
     # current_month = f"{now_utc.month:02d}"
-    current_month = "03"    
+    current_month = "04"    
 
     datas = repository.get_query(
         (ZangiaJobTable.year == current_year) & (ZangiaJobTable.month == current_month)
